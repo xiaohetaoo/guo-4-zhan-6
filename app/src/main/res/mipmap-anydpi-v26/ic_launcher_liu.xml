@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  简洁图标（六级）：橙色底 + 白色大字「六」。
+  布局与「四」版本完全一致，仅前景字形不同。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_fg_liu" />
+    <monochrome android:drawable="@mipmap/ic_fg_liu" />
+</adaptive-icon>

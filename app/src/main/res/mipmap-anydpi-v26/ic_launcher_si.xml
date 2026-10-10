@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  简洁图标（四级）：橙色底 + 白色大字「四」。
+  与「六」版本共用同一个橙色背景色，只有前景字形不同，
+  由用户在设置中开启「简洁图标」后按所选级别自动切换。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_fg_si" />
+    <monochrome android:drawable="@mipmap/ic_fg_si" />
+</adaptive-icon>

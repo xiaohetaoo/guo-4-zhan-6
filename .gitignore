@@ -1,0 +1,30 @@
+# Android / Gradle
+.gradle/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 本机配置与签名密钥（切勿提交）
+local.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Kotlin
+.kotlin/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 构建产物
+*.apk
+*.aab
+*.ap_
+*.dex

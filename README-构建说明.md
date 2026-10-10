@@ -1,0 +1,132 @@
+# 四六级单词助手 · 源码与构建说明
+
+> 杭州电子科技大学第二届 AIGC 应用创新大赛 · 赛题一「AI 辅助开发 · 创意产品原型」
+> 一款**完全离线**的四六级背单词 Android 应用。
+
+---
+
+## 一、这是什么
+
+一个可直接安装使用的 Android APK（`四六级单词助手-v1.0.1-离线版.apk`，8.88 MB），内置 10998 条四六级词条，
+提供发音、释义、例句、词根词缀、联想记忆五层内容，并带单词闯关、历次成绩排行榜、19 项成就系统、
+基于 SM-2 的间隔重复复习、CSV 导出与 JSON 备份恢复，以及跟随系统的深色配色。
+
+**关键特征：完全离线。** 安装包中不含网络请求代码，AndroidManifest 里**未申请 INTERNET 权限**——
+不是"承诺不联网"，而是技术上联不了网。学习数据全部保存在手机本地数据库。
+
+---
+
+## 二、环境要求
+
+| 项 | 版本 |
+|---|---|
+| JDK | 17（Temurin 17.0.20.1 已验证） |
+| Gradle | 8.7 |
+| Android Gradle Plugin | 8.5.2 |
+| Kotlin | 1.9.24 |
+| Compose Compiler | 1.5.14 |
+| Android SDK | compileSdk 34 / build-tools 34.0.0 |
+| minSdk / targetSdk | 26（Android 8.0）/ 34 |
+
+> ⚠️ Gradle 需要 JDK 在 `PATH` 上，仅用 `-Dorg.gradle.java.home=` 指定是不够的。
+> 构建前请先 `export PATH="<jdk-17>/bin:$PATH"`。
+
+---
+
+## 三、目录结构
+
+```
+CetVocab/
+├── settings.gradle.kts           # 仓库源（含阿里云镜像，加速依赖解析）
+├── build.gradle.kts              # 顶层构建脚本
+├── gradle.properties             # JVM 内存与并行/缓存开关
+├── app/
+│   ├── build.gradle.kts          # 应用模块：Compose、签名、打包配置
+│   ├── proguard-rules.pro        # 保留 com.hdu.cetvocab 包
+│   ├── cetvocab-release.jks      # ❌ 未随包分发（签名密钥）
+│   └── src/main/
+│       ├── AndroidManifest.xml   # 仅声明 VIBRATE；无 INTERNET
+│       ├── assets/words.db       # 内置只读词库（7.45 MB，10998 词条）
+│       ├── res/                  # 主题、配色、自适应图标（全部矢量，零位图）
+│       └── java/com/hdu/cetvocab/
+│           ├── CetVocabApp.kt
+│           ├── MainActivity.kt
+│           ├── data/             # Models / WordDb / UserDb / VocabRepository（含 SM-2 调度）/ BackupManager
+│           └── ui/               # AppRoot / AppViewModel / theme（AppColors 主题色）/ components / screens
+└── tools/                        # 词库构建与校验脚本（Python）
+    ├── build_words_db.py         # 七步数据流水线
+    ├── verify_db.py              # PC 端 SQL 校验（与 App 同语句）
+    ├── explore.py                # 开源数据集探查
+    ├── pack_source.py            # 源码打包脚本
+    └── data/mnemonics.json       # 586 条人工审核的精选谐音/联想
+```
+
+---
+
+## 四、构建步骤
+
+```bash
+# 1) 准备 JDK 17 并放进 PATH
+export PATH="/path/to/jdk-17/bin:$PATH"
+
+# 2) 在项目根目录写 local.properties 指向 Android SDK
+echo "sdk.dir=/path/to/android-sdk" > local.properties
+
+# 3) 构建 release APK
+gradle assembleRelease
+
+# 产物：app/build/outputs/apk/release/app-release.apk
+```
+
+如需重新签名，请在 `app/` 下放置 `cetvocab-release.jks`，或在 `app/build.gradle.kts`
+中把 `signingConfigs.release` 改为你自己的 keystore 信息（**本仓库未包含签名密钥**）。
+
+---
+
+## 五、重建词库（可选）
+
+内置词库 `app/src/main/assets/words.db` 由 `tools/build_words_db.py` 生成，流程为：
+
+1. 以 ECDICT 开源词典的 `cet4` / `cet6` 大纲标签确定词表范围，并用两本开源词书补充；
+2. 合并 ECDICT 与 `english-vocabulary` 开源数据，补齐中文释义、英文释义、词性与英美双音标；
+3. 从 14 万条中英例句中用**打分函数**挑选最佳例句（整词匹配优先，惩罚数字、专有名词、超长句）；
+4. 用规则 + 词典校验自动拆解词根词缀（要求剩余词干是真实单词）；
+5. 加载 `tools/data/mnemonics.json` 中人工审核过的 586 条精选谐音/联想；
+6. 用编辑距离算法计算形近词；
+7. 建索引后 `VACUUM` 压缩，输出 SQLite。
+
+```bash
+python tools/build_words_db.py
+python tools/verify_db.py        # 用与 App 完全相同的 SQL 语句做校验
+```
+
+---
+
+## 六、数据来源与授权
+
+| 数据项 | 来源 | 授权 |
+|---|---|---|
+| 四六级大纲词汇范围 | ECDICT 开源词典库的 `cet4` / `cet6` 标签 | MIT License |
+| 补充词表 | 开源词书《四级词汇乱序便携版》《星火四级词汇必背乱序版》 | 开源整理数据 |
+| 中文/英文释义、词性、词频、词形变化 | ECDICT（skywind3000/ECDICT） | MIT License |
+| 英美双音标、例句语料 | 开源词库 english-vocabulary（zhenghaoyang24） | 开源整理数据 |
+| 词根词缀拆解、形近词辨析 | 团队自研算法基于上述数据构建 | 团队原创 |
+| 谐音/联想记忆内容 | 团队使用 AIGC 工具批量生成后**人工逐条审核** | 团队原创（AI 辅助，已标注） |
+| 图标与界面素材 | 团队 Canvas 绘制 + 系统矢量图标 | 团队原创，不含第三方图片素材 |
+
+---
+
+## 七、AI 工具使用说明
+
+本项目在开发过程中使用了 AIGC 工具，具体环节已在项目文档中如实说明：
+
+| 环节 | 工具 |
+|---|---|
+| 需求与产品设计 | 豆包 |
+| 界面与业务代码 | Qoder CN |
+| 助记内容生成 | 通义千问 / DeepSeek |
+| 数据处理脚本 | DeepSeek |
+| 文档与 PPT | 豆包 |
+| 测试用例 | DeepSeek |
+
+**所有 AI 生成内容均经过人工调试、修改与审核**，不存在直接提交未验证产物的情况。

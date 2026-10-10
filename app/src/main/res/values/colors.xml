@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="warm_primary">#FFE2703A</color>
+    <color name="warm_background">#FFFFF8F2</color>
+    <color name="warm_surface">#FFFFFFFF</color>
+    <color name="warm_on_background">#FF3A2A20</color>
+    <color name="ic_launcher_background">#FFE2703A</color>
+</resources>

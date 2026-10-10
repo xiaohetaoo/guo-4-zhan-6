@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      本应用完全离线运行：词库、助记内容、例句全部内置在安装包内，
+      发音使用系统自带 TTS 引擎。
+      因此刻意【不申请】android.permission.INTERNET，从系统层面保证零联网。
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <!-- 声明使用系统 TTS 引擎（离线语音合成） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".CetVocabApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.CetVocab">
+
+        <!--
+          真正的 Activity 不再直接挂在桌面入口上：
+          桌面图标统一由下面三个 activity-alias 提供，
+          运行时按「设置 → 应用图标」的选择，只启用其中一个，
+          从而实现「默认图标 / 简洁四 / 简洁六」三种桌面外观的切换。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.CetVocab"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 入口一：默认图标（打开的书本 + 灵感火花），安装后默认启用 -->
+        <activity-alias
+            android:name=".LauncherDefault"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- 入口二：简洁图标「四」，用户在设置中开启简洁图标且级别为四级时启用 -->
+        <activity-alias
+            android:name=".LauncherSimpleSi"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_si"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_si"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- 入口三：简洁图标「六」，用户在设置中开启简洁图标且级别为六级时启用 -->
+        <activity-alias
+            android:name=".LauncherSimpleLiu"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_liu"
+            android:label="@string/app_name"
+            android:roundIcon="@mipmap/ic_launcher_liu"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+    </application>
+
+</manifest>

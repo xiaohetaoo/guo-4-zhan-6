@@ -1,0 +1,543 @@
+package com.hdu.cetvocab.ui
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.hdu.cetvocab.CetVocabApp
+import com.hdu.cetvocab.data.AchievementDef
+import com.hdu.cetvocab.data.BackupManager
+import com.hdu.cetvocab.data.DayStat
+import com.hdu.cetvocab.data.QuizQuestion
+import com.hdu.cetvocab.data.QuizRecord
+import com.hdu.cetvocab.data.StudyOverview
+import com.hdu.cetvocab.data.VocabRepository
+import com.hdu.cetvocab.data.Word
+import com.hdu.cetvocab.data.WordDb
+import com.hdu.cetvocab.util.LauncherIcons
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// ---------------- UI 状态 ----------------
+
+data class HomeUiState(
+    val loading: Boolean = true,
+    val stage: Int = WordDb.STAGE_CET4,
+    val overview: StudyOverview = StudyOverview(),
+    val goal: Int = 20,
+    val weekStats: List<DayStat> = emptyList(),
+    val dueCount: Int = 0,
+    val queueCount: Int = 0,
+    val recentQuizzes: List<QuizRecord> = emptyList()
+)
+
+data class UnitItem(
+    val unit: Int,
+    val learned: Int,
+    val total: Int,
+    val fromWord: String,
+    val toWord: String
+) {
+    val progress: Float get() = if (total <= 0) 0f else learned.toFloat() / total
+    val done: Boolean get() = total > 0 && learned >= total
+}
+
+data class LearnUiState(
+    val loading: Boolean = true,
+    val stage: Int = WordDb.STAGE_CET4,
+    val units: List<UnitItem> = emptyList(),
+    val totalWords: Int = 0,
+    val learnedWords: Int = 0,
+    val query: String = "",
+    val searchResult: List<Word> = emptyList(),
+    val favWords: List<Word> = emptyList(),
+    val wrongWords: List<Word> = emptyList()
+)
+
+data class StudyUiState(
+    val title: String = "",
+    val queue: List<Word> = emptyList(),
+    val index: Int = 0,
+    val flipped: Boolean = false,
+    val knownCount: Int = 0,
+    val unknownCount: Int = 0,
+    val favIds: Set<Int> = emptySet(),
+    val currentLevel: Int = 0,
+    val finished: Boolean = false,
+    val newAchievements: List<AchievementDef> = emptyList()
+) {
+    val current: Word? get() = queue.getOrNull(index)
+    val total: Int get() = queue.size
+}
+
+data class QuizUiState(
+    val active: Boolean = false,
+    val stage: Int = WordDb.STAGE_CET4,
+    val unit: Int = 0,
+    val questions: List<QuizQuestion> = emptyList(),
+    val index: Int = 0,
+    val selected: Int = -1,
+    val typed: String = "",
+    val revealed: Boolean = false,
+    val score: Int = 0,
+    val correctCount: Int = 0,
+    val combo: Int = 0,
+    val maxCombo: Int = 0,
+    val finished: Boolean = false,
+    val startTs: Long = 0L,
+    val lastRecord: QuizRecord? = null,
+    val stars: Int = 0,
+    val newAchievements: List<AchievementDef> = emptyList()
+) {
+    val current: QuizQuestion? get() = questions.getOrNull(index)
+    val total: Int get() = questions.size
+}
+
+data class ProfileUiState(
+    val loading: Boolean = true,
+    val overview: StudyOverview = StudyOverview(),
+    val unlocked: Map<String, Long> = emptyMap(),
+    val weekStats: List<DayStat> = emptyList(),
+    val goal: Int = 20,
+    val autoSpeak: Boolean = true,
+    val speechRate: Float = 0.92f,
+    val stage: Int = WordDb.STAGE_CET4,
+    val iconStyle: Int = LauncherIcons.STYLE_DEFAULT,
+    val leaderboard: List<QuizRecord> = emptyList()
+)
+
+// ---------------- ViewModel ----------------
+
+class AppViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val repo: VocabRepository = (app as CetVocabApp).repo
+
+    /** 数据导出与备份/恢复（文件写入应用外部私有目录，无需存储权限） */
+    val backup: BackupManager by lazy { BackupManager(getApplication(), repo.userDb, repo.wordDb) }
+
+    private val _home = MutableStateFlow(HomeUiState())
+    val home: StateFlow<HomeUiState> = _home.asStateFlow()
+
+    private val _learn = MutableStateFlow(LearnUiState())
+    val learn: StateFlow<LearnUiState> = _learn.asStateFlow()
+
+    private val _study = MutableStateFlow(StudyUiState())
+    val study: StateFlow<StudyUiState> = _study.asStateFlow()
+
+    private val _quiz = MutableStateFlow(QuizUiState())
+    val quiz: StateFlow<QuizUiState> = _quiz.asStateFlow()
+
+    private val _profile = MutableStateFlow(ProfileUiState())
+    val profile: StateFlow<ProfileUiState> = _profile.asStateFlow()
+
+    private val _toast = MutableStateFlow<String?>(null)
+    val toast: StateFlow<String?> = _toast.asStateFlow()
+
+    val stage: Int get() = repo.stage
+    val dailyGoal: Int get() = repo.dailyGoal
+    val autoSpeak: Boolean get() = repo.autoSpeak
+    val speechRate: Float get() = repo.speechRate
+
+    fun consumeToast() {
+        _toast.value = null
+    }
+
+    private fun notify(msg: String) {
+        _toast.value = msg
+    }
+
+    // ---------- 首页 ----------
+
+    fun refreshHome() {
+        viewModelScope.launch {
+            val data = withContext(Dispatchers.IO) {
+                val overview = repo.overview()
+                val due = repo.dueWords(40).size
+                val queue = repo.todayQueue()
+                HomeUiState(
+                    loading = false,
+                    stage = repo.stage,
+                    overview = overview,
+                    goal = repo.dailyGoal,
+                    weekStats = repo.userDb.recentDays(7),
+                    dueCount = due,
+                    queueCount = queue.size,
+                    recentQuizzes = repo.userDb.recentQuizRecords(5)
+                )
+            }
+            _home.value = data
+        }
+    }
+
+    fun setStage(stage: Int) {
+        repo.stage = stage
+        repo.currentUnit = repo.wordDb.firstUnit(stage)
+        refreshAll()
+    }
+
+    /**
+     * 切换桌面图标风格。
+     *
+     * 这里只改偏好，不立刻写系统组件状态：被切换的 activity-alias 正是当前任务的根组件，
+     * 一旦当场停用，系统会连带结束当前任务，把用户直接顶回桌面。
+     * 真正落地放在 [com.hdu.cetvocab.MainActivity.onStop]（应用退到后台时），
+     * 用户回到桌面时新图标已经就绪，切换过程无感。
+     */
+    fun setIconStyle(style: Int) {
+        repo.iconStyle = style
+        _profile.update { it.copy(iconStyle = style) }
+        notify(
+            if (style == LauncherIcons.STYLE_SIMPLE) "已选择简洁图标，回到桌面即可看到"
+            else "已切回默认图标"
+        )
+    }
+
+    fun setDailyGoal(goal: Int) {
+        repo.dailyGoal = goal
+        refreshHome()
+        refreshProfile()
+    }
+
+    fun setAutoSpeak(enabled: Boolean) {
+        repo.autoSpeak = enabled
+        _profile.update { it.copy(autoSpeak = enabled) }
+    }
+
+    fun setSpeechRate(rate: Float) {
+        repo.speechRate = rate
+        _profile.update { it.copy(speechRate = rate) }
+    }
+
+    fun resetAll() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repo.resetAll() }
+            refreshAll()
+            notify("学习数据已清空")
+        }
+    }
+
+    fun refreshAll() {
+        refreshHome()
+        refreshLearn()
+        refreshProfile()
+    }
+
+    // ---------- 学习 ----------
+
+    fun refreshLearn() {
+        viewModelScope.launch {
+            val data = withContext(Dispatchers.IO) {
+                val stage = repo.stage
+                val states = repo.userDb.states()
+                val unitCount = repo.wordDb.unitCount(stage)
+                val units = (1..unitCount).map { u ->
+                    val words = repo.wordDb.wordsOfUnit(stage, u)
+                    UnitItem(
+                        unit = u,
+                        learned = words.count { (states[it.id]?.level ?: 0) > 0 },
+                        total = words.size,
+                        fromWord = words.firstOrNull()?.word ?: "",
+                        toWord = words.lastOrNull()?.word ?: ""
+                    )
+                }
+                LearnUiState(
+                    loading = false,
+                    stage = stage,
+                    units = units,
+                    totalWords = repo.wordDb.countOfStage(stage),
+                    learnedWords = repo.wordDb.wordsOfStage(stage)
+                        .count { (states[it.id]?.level ?: 0) > 0 },
+                    favWords = repo.favWords(),
+                    wrongWords = repo.wrongWords(40)
+                )
+            }
+            _learn.value = data
+        }
+    }
+
+    fun search(keyword: String) {
+        _learn.update { it.copy(query = keyword) }
+        if (keyword.isBlank()) {
+            _learn.update { it.copy(searchResult = emptyList()) }
+            return
+        }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { repo.wordDb.search(keyword) }
+            _learn.update { it.copy(searchResult = result) }
+        }
+    }
+
+    // ---------- 背单词流程 ----------
+
+    fun startTodayStudy() {
+        viewModelScope.launch {
+            val queue = withContext(Dispatchers.IO) { repo.todayQueue() }
+            startQueue("今日学习", queue)
+        }
+    }
+
+    fun startUnitStudy(unit: Int) {
+        viewModelScope.launch {
+            val queue = withContext(Dispatchers.IO) { repo.unitWords(unit) }
+            startQueue("第 $unit 单元", queue)
+        }
+    }
+
+    fun startFavStudy() {
+        viewModelScope.launch {
+            val queue = withContext(Dispatchers.IO) { repo.favWords() }
+            if (queue.isEmpty()) {
+                notify("还没有收藏的生词")
+                return@launch
+            }
+            startQueue("生词本复习", queue)
+        }
+    }
+
+    fun startWrongStudy() {
+        viewModelScope.launch {
+            val queue = withContext(Dispatchers.IO) { repo.wrongWords(50) }
+            if (queue.isEmpty()) {
+                notify("暂时没有错词记录")
+                return@launch
+            }
+            startQueue("错词强化", queue)
+        }
+    }
+
+    private suspend fun startQueue(title: String, queue: List<Word>) {
+        if (queue.isEmpty()) {
+            notify("这里暂时没有需要学习的单词")
+            return
+        }
+        val favIds = withContext(Dispatchers.IO) {
+            repo.userDb.states().values.filter { it.fav }.map { it.wordId }.toSet()
+        }
+        _study.value = StudyUiState(
+            title = title,
+            queue = queue,
+            index = 0,
+            favIds = favIds,
+            currentLevel = repo.userDb.stateOf(queue.first().id).level
+        )
+    }
+
+    fun flipCard() {
+        _study.update { it.copy(flipped = !it.flipped) }
+    }
+
+    fun answerCurrent(known: Boolean) {
+        val state = _study.value
+        val word = state.current ?: return
+        viewModelScope.launch {
+            val newLevel = withContext(Dispatchers.IO) {
+                val lv = repo.answerWord(word, known)
+                repo.evaluateAchievements()
+                lv
+            }
+            val nextIndex = state.index + 1
+            if (nextIndex >= state.queue.size) {
+                val gained = withContext(Dispatchers.IO) { repo.evaluateAchievements() }
+                _study.update {
+                    it.copy(
+                        index = nextIndex,
+                        flipped = false,
+                        knownCount = it.knownCount + if (known) 1 else 0,
+                        unknownCount = it.unknownCount + if (known) 0 else 1,
+                        finished = true,
+                        newAchievements = gained
+                    )
+                }
+                refreshHome()
+            } else {
+                _study.update {
+                    it.copy(
+                        index = nextIndex,
+                        flipped = false,
+                        knownCount = it.knownCount + if (known) 1 else 0,
+                        unknownCount = it.unknownCount + if (known) 0 else 1,
+                        currentLevel = repo.userDb.stateOf(state.queue[nextIndex].id).level
+                    )
+                }
+            }
+            if (newLevel >= 3) { /* 等级提升，无需提示 */ }
+        }
+    }
+
+    fun toggleFavCurrent() {
+        val word = _study.value.current ?: return
+        viewModelScope.launch {
+            val fav = withContext(Dispatchers.IO) { repo.toggleFav(word) }
+            _study.update {
+                val set = it.favIds.toMutableSet()
+                if (fav) set.add(word.id) else set.remove(word.id)
+                it.copy(favIds = set)
+            }
+            refreshLearn()
+        }
+    }
+
+    fun toggleFav(word: Word) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repo.toggleFav(word) }
+            refreshLearn()
+            refreshProfile()
+        }
+    }
+
+    fun finishStudy() {
+        val state = _study.value
+        val gained = state.newAchievements
+        _study.value = StudyUiState()
+        refreshAll()
+        if (gained.isNotEmpty()) {
+            notify("解锁成就：" + gained.joinToString("、") { it.title })
+        }
+    }
+
+    fun addStudySeconds(seconds: Long) {
+        viewModelScope.launch { withContext(Dispatchers.IO) { repo.addStudySeconds(seconds) } }
+    }
+
+    // ---------- 闯关 ----------
+
+    fun startQuiz(unit: Int) {
+        viewModelScope.launch {
+            val questions = withContext(Dispatchers.IO) { repo.buildQuiz(unit, 10) }
+            if (questions.isEmpty()) {
+                notify("该单元单词不足，换一个单元试试")
+                return@launch
+            }
+            _quiz.value = QuizUiState(
+                active = true,
+                stage = repo.stage,
+                unit = unit,
+                questions = questions,
+                startTs = System.currentTimeMillis()
+            )
+        }
+    }
+
+    fun selectOption(index: Int) {
+        val state = _quiz.value
+        if (state.revealed) return
+        val question = state.current ?: return
+        val correct = index == question.correctIndex
+        applyAnswer(correct, state, selected = index)
+    }
+
+    fun submitSpelling() {
+        val state = _quiz.value
+        if (state.revealed) return
+        val question = state.current ?: return
+        val correct = state.typed.trim().equals(question.word.word.trim(), ignoreCase = true)
+        applyAnswer(correct, state)
+    }
+
+    fun updateTyped(text: String) {
+        _quiz.update { it.copy(typed = text) }
+    }
+
+    private fun applyAnswer(correct: Boolean, state: QuizUiState, selected: Int = state.selected) {
+        val gain = if (correct) {
+            val base = if (state.current?.spelling == true) 15 else 10
+            base + minOf(state.combo, 5) * 2
+        } else 0
+        _quiz.update {
+            it.copy(
+                selected = selected,
+                revealed = true,
+                score = it.score + gain,
+                correctCount = it.correctCount + if (correct) 1 else 0,
+                combo = if (correct) it.combo + 1 else 0,
+                maxCombo = if (correct) maxOf(it.maxCombo, it.combo + 1) else it.maxCombo
+            )
+        }
+    }
+
+    fun nextQuestion() {
+        val state = _quiz.value
+        val next = state.index + 1
+        if (next >= state.questions.size) {
+            finishQuiz()
+        } else {
+            _quiz.update { it.copy(index = next, selected = -1, typed = "", revealed = false) }
+        }
+    }
+
+    private fun finishQuiz() {
+        val state = _quiz.value
+        val duration = System.currentTimeMillis() - state.startTs
+        val accuracy = if (state.questions.isEmpty()) 0
+        else state.correctCount * 100 / state.questions.size
+        val stars = when {
+            accuracy >= 90 -> 3
+            accuracy >= 70 -> 2
+            accuracy >= 50 -> 1
+            else -> 0
+        }
+        viewModelScope.launch {
+            val gained = withContext(Dispatchers.IO) {
+                val record = repo.saveQuizRecord(
+                    unit = state.unit,
+                    mode = "mix",
+                    score = state.score,
+                    total = state.questions.size,
+                    correct = state.correctCount,
+                    maxCombo = state.maxCombo,
+                    durationMs = duration
+                )
+                repo.evaluateAchievements(record) to record
+            }
+            _quiz.update {
+                it.copy(
+                    finished = true,
+                    stars = stars,
+                    lastRecord = gained.second,
+                    newAchievements = gained.first
+                )
+            }
+            refreshHome()
+            refreshProfile()
+        }
+    }
+
+    fun exitQuiz() {
+        _quiz.value = QuizUiState()
+        refreshHome()
+        refreshProfile()
+    }
+
+    // ---------- 我的 / 成就 / 排行榜 ----------
+
+    fun refreshProfile() {
+        viewModelScope.launch {
+            val data = withContext(Dispatchers.IO) {
+                ProfileUiState(
+                    loading = false,
+                    overview = repo.overview(),
+                    unlocked = repo.unlockedAchievements(),
+                    weekStats = repo.userDb.recentDays(14),
+                    goal = repo.dailyGoal,
+                    autoSpeak = repo.autoSpeak,
+                    speechRate = repo.speechRate,
+                    stage = repo.stage,
+                    iconStyle = repo.iconStyle,
+                    leaderboard = repo.userDb.quizRecords(50)
+                )
+            }
+            _profile.value = data
+        }
+    }
+
+    fun refreshLeaderboard() {
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) { repo.userDb.quizRecords(50) }
+            _profile.update { it.copy(leaderboard = list) }
+        }
+    }
+}

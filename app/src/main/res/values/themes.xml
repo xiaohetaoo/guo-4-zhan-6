@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.CetVocab" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/warm_background</item>
+        <item name="android:statusBarColor">@color/warm_background</item>
+        <item name="android:navigationBarColor">@color/warm_surface</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:textColorPrimary">@color/warm_on_background</item>
+    </style>
+</resources>
