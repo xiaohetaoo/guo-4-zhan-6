@@ -71,6 +71,14 @@ class WordDb(private val context: Context) {
     fun wordsOfStage(stage: Int): List<Word> =
         queryWords("stage=?", arrayOf(stage.toString()), "\"rank\"")
 
+    /** 按首字母取词（字母不分大小写），用于「按首字母闯关」 */
+    fun wordsByInitial(stage: Int, letter: Char): List<Word> =
+        queryWords(
+            "stage=? AND UPPER(substr(word,1,1))=?",
+            arrayOf(stage.toString(), letter.uppercaseChar().toString()),
+            "\"rank\""
+        )
+
     fun wordById(id: Int): Word? =
         queryWords("id=?", arrayOf(id.toString()), null).firstOrNull()
 

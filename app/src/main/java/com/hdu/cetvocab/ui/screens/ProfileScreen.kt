@@ -1,5 +1,6 @@
 package com.hdu.cetvocab.ui.screens
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +25,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -37,6 +43,9 @@ import com.hdu.cetvocab.ui.components.StatTile
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.components.WeekBarChart
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun ProfileScreen(
@@ -68,7 +77,7 @@ fun ProfileScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconBox("⚙") { onOpenSettings() }
+                IconBox { onOpenSettings() }
             }
         }
 
@@ -218,7 +227,7 @@ fun ProfileScreen(
 }
 
 @Composable
-private fun IconBox(glyph: String, onClick: () -> Unit) {
+private fun IconBox(onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(40.dp)
@@ -227,7 +236,63 @@ private fun IconBox(glyph: String, onClick: () -> Unit) {
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
-        Text(text = glyph, fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        GearIcon(
+            modifier = Modifier.size(21.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * 自绘齿轮图标。
+ *
+ * 原先这里用的是 Unicode 字符「⚙」，但该字形的具体长相取决于系统字体——
+ * 在多数 Android 字体里它被画成「圆环 + 一圈小尖刺」，看着像船舵或太阳而不是齿轮。
+ * 改为按几何关系手绘：8 个梯形齿 + 中心圆孔，形状稳定且与矢量图标一致。
+ */
+@Composable
+private fun GearIcon(modifier: Modifier = Modifier, color: Color) {
+    Canvas(modifier = modifier) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val outerR = size.minDimension / 2f      // 齿顶圆半径
+        val bodyR = outerR * 0.76f               // 齿根圆半径
+        val holeR = outerR * 0.30f               // 中心孔半径
+        val teeth = 8
+        val step = (2.0 * PI / teeth).toFloat()  // 每个齿占的圆心角
+        val topHalf = step * 0.17f               // 齿顶半角
+        val rootHalf = step * 0.30f              // 齿根半角
+
+        fun polar(r: Float, a: Float) = Offset(cx + r * cos(a), cy + r * sin(a))
+        fun deg(a: Float) = (a * 180.0 / PI).toFloat()
+
+        val body = Rect(cx - bodyR, cy - bodyR, cx + bodyR, cy + bodyR)
+
+        val path = Path().apply {
+            // 外轮廓与中心孔互不重叠，用 EvenOdd 即可把孔挖空
+            fillType = PathFillType.EvenOdd
+            for (i in 0 until teeth) {
+                val c = i * step
+                val p1 = polar(bodyR, c - rootHalf)
+                val p2 = polar(outerR, c - topHalf)
+                val p3 = polar(outerR, c + topHalf)
+                val p4 = polar(bodyR, c + rootHalf)
+                if (i == 0) moveTo(p1.x, p1.y) else lineTo(p1.x, p1.y)
+                lineTo(p2.x, p2.y)
+                lineTo(p3.x, p3.y)
+                lineTo(p4.x, p4.y)
+                // 齿根用圆弧连到下一个齿，比直线更接近真实齿轮
+                arcTo(
+                    rect = body,
+                    startAngleDegrees = deg(c + rootHalf),
+                    sweepAngleDegrees = deg(step - 2f * rootHalf),
+                    forceMoveTo = false
+                )
+            }
+            close()
+            addOval(Rect(cx - holeR, cy - holeR, cx + holeR, cy + holeR))
+        }
+        drawPath(path, color)
     }
 }
 

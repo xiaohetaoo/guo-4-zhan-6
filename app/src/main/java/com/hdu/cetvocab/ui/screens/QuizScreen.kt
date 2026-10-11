@@ -44,10 +44,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hdu.cetvocab.data.QUIZ_SCOPE_ALL
 import com.hdu.cetvocab.data.QuizQuestion
 import com.hdu.cetvocab.data.WordDb
+import com.hdu.cetvocab.data.quizScopeLabel
 import com.hdu.cetvocab.ui.AppViewModel
-import com.hdu.cetvocab.ui.UnitItem
+import com.hdu.cetvocab.ui.LetterItem
 import com.hdu.cetvocab.ui.components.AchievementBadge
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.SectionTitle
@@ -69,24 +71,33 @@ fun QuizScreen(
     }
 
     when {
-        state.finished -> QuizResult(state, onExit, onAgain = { vm.startQuiz(state.unit) }, vm = vm)
+        state.finished -> QuizResult(
+            state,
+            onExit,
+            onAgain = {
+                // 首字母挑战重开时仍按该字母出题；单元 / 全词挑战沿用原来的范围值
+                val letter = state.letter
+                if (letter != null) vm.startLetterQuiz(letter) else vm.startQuiz(state.unit)
+            },
+            vm = vm
+        )
         state.active -> QuizPlay(state, vm, onSpeak, onQuit = { vm.exitQuiz() })
         else -> QuizPicker(
-            units = learn.units,
+            letters = learn.letters,
             stage = learn.stage,
-            onPick = { vm.startQuiz(it) },
-            onFullStage = { vm.startQuiz(-1) }
+            onPick = { vm.startLetterQuiz(it) },
+            onFullStage = { vm.startQuiz(QUIZ_SCOPE_ALL) }
         )
     }
 }
 
-// ---------------------------------------------------------------- 选择单元
+// ---------------------------------------------------------------- 选择首字母
 
 @Composable
 private fun QuizPicker(
-    units: List<UnitItem>,
+    letters: List<LetterItem>,
     stage: Int,
-    onPick: (Int) -> Unit,
+    onPick: (Char) -> Unit,
     onFullStage: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -105,7 +116,7 @@ private fun QuizPicker(
             Spacer(Modifier.height(12.dp))
             AppCard(color = LocalAppColors.current.cardAmber, padding = 14.dp) {
                 Text(
-                    text = "玩法：答对得分并累积连击，拼写题分值更高。选择下方单元开始 10 题挑战。",
+                    text = "玩法：答对得分并累积连击，拼写题分值更高。选择下方首字母开始 10 题挑战。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -131,47 +142,54 @@ private fun QuizPicker(
                 }
             }
         }
-        if (units.isEmpty()) {
+        if (letters.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("词库尚未就绪", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             return
         }
         LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
+            columns = GridCells.Fixed(4),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(units, key = { it.unit }) { u ->
+            items(letters, key = { it.letter }) { item ->
+                // 选义题需要 4 个不同选项，词数不足的字母（如 X）无法出题，置灰不可点
+                val usable = item.total >= 4
+                val accent = when {
+                    !usable -> MaterialTheme.colorScheme.onSurfaceVariant
+                    item.done -> LocalAppColors.current.success
+                    else -> MaterialTheme.colorScheme.primary
+                }
                 Column(
                     modifier = Modifier
                         .clip(RoundedCornerShape(18.dp))
-                        .background(if (u.done) LocalAppColors.current.cardMint else MaterialTheme.colorScheme.surface)
+                        .background(
+                            when {
+                                !usable -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                item.done -> LocalAppColors.current.cardMint
+                                else -> MaterialTheme.colorScheme.surface
+                            }
+                        )
                         .border(
                             1.dp,
                             MaterialTheme.colorScheme.outlineVariant,
                             RoundedCornerShape(18.dp)
                         )
-                        .clickable { onPick(u.unit) }
+                        .clickable(enabled = usable) { onPick(item.letter) }
                         .padding(vertical = 14.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "${u.unit}",
-                        fontSize = 22.sp,
+                        text = "${item.letter}",
+                        fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (u.done) LocalAppColors.current.success else MaterialTheme.colorScheme.primary
+                        color = accent
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "第 ${u.unit} 单元",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "${u.learned}/${u.total}",
+                        text = if (usable) "${item.learned}/${item.total}" else "词数不足",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -213,7 +231,7 @@ private fun QuizPlay(
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (state.unit < 0) "${WordDb.stageLabel(state.stage)} · 全词挑战" else "${WordDb.stageLabel(state.stage)} · 第 ${state.unit} 单元",
+                        text = quizScopeLabel(state.stage, state.unit),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -626,7 +644,11 @@ private fun QuizResult(
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            text = if (state.unit < 0) "返回后可重新挑战本级全部词汇" else "返回后可继续选择其他单元",
+            text = when {
+                state.letter != null -> "返回后可继续选择其他首字母"
+                state.unit == QUIZ_SCOPE_ALL -> "返回后可重新挑战本级全部词汇"
+                else -> "返回后可继续选择其他单元"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.clickable { vm.exitQuiz() }

@@ -64,6 +64,30 @@ data class QuizRecord(
     val accuracy: Int get() = if (total <= 0) 0 else correct * 100 / total
 }
 
+/**
+ * 闯关范围编码（`QuizUiState.unit` 与 `QuizRecord.unit` 共用同一套约定）：
+ * - `>= 1`  → 单元挑战，值即单元号
+ * - `-1`    → 全阶段全词挑战
+ * - `<= -2` → 首字母挑战，字母索引 = `-unit - 2`（0 = A，25 = Z）
+ */
+const val QUIZ_SCOPE_ALL = -1
+
+/** 首字母对应的闯关范围值 */
+fun quizScopeOfLetter(letter: Char): Int = -(letter.uppercaseChar() - 'A') - 2
+
+/** 闯关范围值对应的首字母；非字母范围返回 null */
+fun quizLetterOfScope(unit: Int): Char? = if (unit <= -2) ('A' + (-unit - 2)) else null
+
+/** 闯关范围的可读标签，用于答题页标题与排行榜 */
+fun quizScopeLabel(stage: Int, unit: Int): String {
+    val prefix = WordDb.stageLabel(stage)
+    return when {
+        unit >= 1 -> "$prefix · 第 $unit 单元"
+        unit == QUIZ_SCOPE_ALL -> "$prefix · 全词挑战"
+        else -> "$prefix · 首字母 ${quizLetterOfScope(unit)}"
+    }
+}
+
 /** 每日学习统计 */
 data class DayStat(
     val day: String,

@@ -175,6 +175,10 @@ class VocabRepository(context: Context) {
     fun buildStageQuiz(count: Int = 30, spellingRatio: Float = 0.25f): List<QuizQuestion> =
         buildQuizFromPool(wordDb.wordsOfStage(stage), count, spellingRatio)
 
+    /** 首字母挑战：从该首字母下的全部单词随机抽题（字母不分大小写）。 */
+    fun buildLetterQuiz(letter: Char, count: Int = 10, spellingRatio: Float = 0.25f): List<QuizQuestion> =
+        buildQuizFromPool(wordDb.wordsByInitial(stage, letter), count, spellingRatio)
+
     private fun buildQuizFromPool(
         pool: List<Word>,
         count: Int,

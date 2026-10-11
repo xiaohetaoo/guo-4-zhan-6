@@ -13,6 +13,8 @@ import com.hdu.cetvocab.data.StudyOverview
 import com.hdu.cetvocab.data.VocabRepository
 import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.data.WordDb
+import com.hdu.cetvocab.data.quizLetterOfScope
+import com.hdu.cetvocab.data.quizScopeOfLetter
 import com.hdu.cetvocab.util.LauncherIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,8 +33,7 @@ data class HomeUiState(
     val goal: Int = 20,
     val weekStats: List<DayStat> = emptyList(),
     val dueCount: Int = 0,
-    val queueCount: Int = 0,
-    val recentQuizzes: List<QuizRecord> = emptyList()
+    val queueCount: Int = 0
 )
 
 data class UnitItem(
@@ -46,10 +47,21 @@ data class UnitItem(
     val done: Boolean get() = total > 0 && learned >= total
 }
 
+/** 首字母分组（闯关页按 A–Z 选关） */
+data class LetterItem(
+    val letter: Char,
+    val learned: Int,
+    val total: Int
+) {
+    val progress: Float get() = if (total <= 0) 0f else learned.toFloat() / total
+    val done: Boolean get() = total > 0 && learned >= total
+}
+
 data class LearnUiState(
     val loading: Boolean = true,
     val stage: Int = WordDb.STAGE_CET4,
     val units: List<UnitItem> = emptyList(),
+    val letters: List<LetterItem> = emptyList(),
     val totalWords: Int = 0,
     val learnedWords: Int = 0,
     val query: String = "",
@@ -97,6 +109,8 @@ data class QuizUiState(
 ) {
     val current: QuizQuestion? get() = questions.getOrNull(index)
     val total: Int get() = questions.size
+    /** 首字母挑战时的字母；单元 / 全词挑战返回 null */
+    val letter: Char? get() = quizLetterOfScope(unit)
 }
 
 data class ProfileUiState(
@@ -168,8 +182,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     goal = repo.dailyGoal,
                     weekStats = repo.userDb.recentDays(7),
                     dueCount = due,
-                    queueCount = queue.size,
-                    recentQuizzes = repo.userDb.recentQuizRecords(5)
+                    queueCount = queue.size
                 )
             }
             _home.value = data
@@ -249,6 +262,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val data = withContext(Dispatchers.IO) {
                 val stage = repo.stage
                 val states = repo.userDb.states()
+                val allWords = repo.wordDb.wordsOfStage(stage)
                 val unitCount = repo.wordDb.unitCount(stage)
                 val units = (1..unitCount).map { u ->
                     val words = repo.wordDb.wordsOfUnit(stage, u)
@@ -260,13 +274,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         toWord = words.lastOrNull()?.word ?: ""
                     )
                 }
+                // 首字母分组（闯关页按 A–Z 选关），复用已加载的全量词表，避免重复查询
+                val letters = allWords
+                    .filter { it.word.isNotEmpty() }
+                    .groupBy { it.word.first().uppercaseChar() }
+                    .filterKeys { it in 'A'..'Z' }
+                    .toSortedMap()
+                    .map { (ch, ws) ->
+                        LetterItem(
+                            letter = ch,
+                            learned = ws.count { (states[it.id]?.level ?: 0) > 0 },
+                            total = ws.size
+                        )
+                    }
                 LearnUiState(
                     loading = false,
                     stage = stage,
                     units = units,
+                    letters = letters,
                     totalWords = repo.wordDb.countOfStage(stage),
-                    learnedWords = repo.wordDb.wordsOfStage(stage)
-                        .count { (states[it.id]?.level ?: 0) > 0 },
+                    learnedWords = allWords.count { (states[it.id]?.level ?: 0) > 0 },
                     favWords = repo.favWords(),
                     wrongWords = repo.wrongWords(40)
                 )
@@ -447,6 +474,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 active = true,
                 stage = challengeStage,
                 unit = unit,
+                questions = questions,
+                startTs = System.currentTimeMillis()
+            )
+        }
+    }
+
+    /** 首字母挑战：从该首字母下的全部单词出题（字母不分大小写） */
+    fun startLetterQuiz(letter: Char) {
+        viewModelScope.launch {
+            val challengeStage = repo.stage
+            val questions = withContext(Dispatchers.IO) { repo.buildLetterQuiz(letter, 10) }
+            if (questions.isEmpty()) {
+                notify("「${letter.uppercaseChar()}」开头的单词不足，换一个字母试试")
+                return@launch
+            }
+            _quiz.value = QuizUiState(
+                active = true,
+                stage = challengeStage,
+                unit = quizScopeOfLetter(letter),
                 questions = questions,
                 startTs = System.currentTimeMillis()
             )

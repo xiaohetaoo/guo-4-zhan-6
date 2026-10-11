@@ -31,7 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.data.QuizRecord
-import com.hdu.cetvocab.data.WordDb
+import com.hdu.cetvocab.data.quizScopeLabel
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.AppTopBar
@@ -146,7 +146,7 @@ private fun RankRow(rank: Int, record: QuizRecord) {
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "${WordDb.stageLabel(record.stage)} · 第 ${record.unit} 单元",
+                    text = quizScopeLabel(record.stage, record.unit),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface

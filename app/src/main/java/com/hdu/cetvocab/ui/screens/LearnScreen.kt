@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -25,14 +27,17 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,6 +53,7 @@ import com.hdu.cetvocab.ui.components.LevelDots
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import kotlinx.coroutines.launch
 
 @Composable
 fun LearnScreen(
@@ -80,24 +86,29 @@ fun LearnScreen(
                 }
             }
             Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(LocalAppColors.current.cardSky)
-                    .clickable {
+            AppCard(color = LocalAppColors.current.cardPeach, padding = 14.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "预览全部单词",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = "像好友列表一样按字母快速浏览 ${state.totalWords} 个词",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(onClick = {
                         showingAllWords = true
                         vm.previewAllWords()
+                    }) {
+                        Text("浏览全部")
                     }
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("预览全部单词", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text("像好友列表一样按字母快速浏览 ${state.totalWords} 个词", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text("›", fontSize = 22.sp, color = MaterialTheme.colorScheme.primary)
             }
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
@@ -169,28 +180,69 @@ fun LearnScreen(
             if (state.allWordsLoading) {
                 EmptyHint("正在加载全部单词…")
             } else {
-                val groups = state.allWords.groupBy { it.word.firstOrNull()?.uppercaseChar()?.toString() ?: "#" }
-                LazyColumn(
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
+                // 分组结果必须缓存：LazyColumn 滚动会频繁重组，几千个词每次重新分组会明显掉帧
+                val groups = remember(state.allWords) {
+                    state.allWords
+                        .groupBy { it.word.firstOrNull()?.uppercaseChar()?.toString() ?: "#" }
+                        .toSortedMap()
+                }
+                val listState = rememberLazyListState()
+                val scope = rememberCoroutineScope()
+                // 每个字母分组在列表中的起始下标（每组 = 1 个字母头 + N 个词条）
+                val letterStarts = remember(groups) {
+                    val map = LinkedHashMap<String, Int>()
+                    var idx = 0
                     groups.forEach { (letter, words) ->
-                        item(key = "letter-$letter") {
-                            Text(
-                                text = letter,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                        map[letter] = idx
+                        idx += words.size + 1
+                    }
+                    map
+                }
+                val letters = letterStarts.keys.toList()
+                val currentLetter by remember(letters) {
+                    derivedStateOf {
+                        val idx = listState.firstVisibleItemIndex
+                        var cur = letters.firstOrNull()
+                        for (l in letters) {
+                            if ((letterStarts[l] ?: 0) <= idx) cur = l else break
                         }
-                        items(words, key = { "all-${it.id}" }) { word ->
-                            WordRow(w = word, onClick = { onOpenWord(word.id) })
+                        cur
+                    }
+                }
+                Box(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        contentPadding = PaddingValues(start = 16.dp, end = 34.dp, bottom = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        groups.forEach { (letter, words) ->
+                            item(key = "letter-$letter") {
+                                Text(
+                                    text = letter,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            items(words, key = { "all-${it.id}" }) { word ->
+                                WordRow(w = word, onClick = { onOpenWord(word.id) })
+                            }
                         }
                     }
+                    LetterIndexBar(
+                        letters = letters,
+                        current = currentLetter,
+                        onPick = { letter ->
+                            letterStarts[letter]?.let { idx ->
+                                scope.launch { listState.scrollToItem(idx) }
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    )
                 }
             }
             return
@@ -453,5 +505,46 @@ private fun WordRow(w: Word, onClick: () -> Unit) {
             fontSize = 18.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * 右侧 A–Z 快速跳转条（通讯录样式）。
+ * 点击字母把列表滚到该字母分组；滚动时高亮当前所在字母。
+ */
+@Composable
+private fun LetterIndexBar(
+    letters: List<String>,
+    current: String?,
+    onPick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .padding(end = 3.dp)
+            .clip(RoundedCornerShape(13.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f))
+            .padding(horizontal = 2.dp, vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        letters.forEach { letter ->
+            val active = letter == current
+            Box(
+                modifier = Modifier
+                    .size(width = 18.dp, height = 16.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    .clickable { onPick(letter) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = letter,
+                    fontSize = 10.sp,
+                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                    color = if (active) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.primary
+                )
+            }
+        }
     }
 }
