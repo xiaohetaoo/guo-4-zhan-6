@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,9 +32,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.data.Achievements
+import com.hdu.cetvocab.data.Tier
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
@@ -129,6 +132,8 @@ fun ProfileScreen(
                             )
                         }
                     }
+                    Spacer(Modifier.width(12.dp))
+                    TierBadge(learnedWords = ov.totalLearned)
                 }
             }
         }
@@ -203,25 +208,30 @@ fun ProfileScreen(
         }
 
         // ---------- 入口 ----------
+        // 「成就墙」不再单列：上方成就卡右上角的「全部 ›」已是同一入口，避免重复。
         item {
             AppCard {
                 MenuRow("历次成绩排行榜", "查看每一次闯关的得分与排名", LocalAppColors.current.cardAmber, onOpenLeaderboard)
-                Spacer(Modifier.height(10.dp))
-                MenuRow("成就墙", "解锁 $unlockedCount 个成就，共 ${Achievements.ALL.size} 个", LocalAppColors.current.cardMint, onOpenAchievements)
-                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 10.dp),
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                )
                 MenuRow("设置", "每日目标、发音、数据管理", LocalAppColors.current.cardSky, onOpenSettings)
             }
         }
 
         item {
-            AppCard(color = MaterialTheme.colorScheme.surfaceVariant, padding = 16.dp) {
-                Text(
-                    text = "本应用完全离线运行：词库、例句与助记内容全部内置，" +
-                        "发音使用系统语音引擎，未申请网络权限，学习数据仅保存在本机。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            Text(
+                text = "本应用完全离线运行：词库、例句与助记内容全部内置，" +
+                    "发音使用系统语音引擎，未申请网络权限，学习数据仅保存在本机。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+            )
         }
     }
 }
@@ -296,22 +306,72 @@ private fun GearIcon(modifier: Modifier = Modifier, color: Color) {
     }
 }
 
+/**
+ * 段位徽章：按累计已学单词数显示「青铜 / 白银 / 黄金 / 钻石 / 王者」，
+ * 下方小字提示距离下一段位还差多少词。
+ */
+@Composable
+private fun TierBadge(learnedWords: Int, modifier: Modifier = Modifier) {
+    val tier = Tier.of(learnedWords)
+    val color = tierColor(tier)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(color.copy(alpha = 0.14f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = tier.label,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            color = color
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            text = tier.next?.let { "距${it.label} ${tier.wordsToNext(learnedWords)} 词" }
+                ?: "已达最高段位",
+            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** 段位配色（青铜→王者依次递进） */
+private fun tierColor(tier: Tier): Color = when (tier) {
+    Tier.BRONZE -> Color(0xFFB87333)
+    Tier.SILVER -> Color(0xFF8E9AA6)
+    Tier.GOLD -> Color(0xFFD9A406)
+    Tier.DIAMOND -> Color(0xFF3FA9F5)
+    Tier.KING -> Color(0xFFE2703A)
+}
+
+/**
+ * 入口行。原先每行铺一块整宽彩色底，三行叠在一起视觉很重；
+ * 改为「左侧小色点 + 文字 + 右侧箭头」的轻量行式，行高也随之收紧。
+ */
 @Composable
 private fun MenuRow(
     title: String,
     subtitle: String,
-    container: androidx.compose.ui.graphics.Color,
+    accent: Color,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(container)
+            .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 14.dp),
+            .padding(horizontal = 10.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(accent)
+        )
+        Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,

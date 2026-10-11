@@ -1,5 +1,8 @@
 package com.hdu.cetvocab.ui.screens
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,11 +23,15 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -39,6 +46,7 @@ import com.hdu.cetvocab.ui.components.StatTile
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.components.WeekBarChart
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import kotlin.math.roundToInt
 
 @Composable
 fun HomeScreen(
@@ -49,9 +57,29 @@ fun HomeScreen(
     val ov = state.overview
     val progress = if (state.goal <= 0) 0f
     else (ov.todayLearned.toFloat() / state.goal).coerceIn(0f, 1f)
+    // 目前进度：当前级别已学单词 ÷ 本级总词数
+    val stageProgressPct = if (state.totalWords <= 0) 0
+    else (state.stageLearned * 100.0 / state.totalWords).roundToInt()
+
+    // 四六级切换时整页重放一次「淡入 + 轻微上滑」。
+    // 只认「级别真的变了」才播：首次进入首页、从别的 tab 切回来都不重放，避免无谓的闪动。
+    val stageAnim = remember { Animatable(1f) }
+    val seenStage = remember { mutableIntStateOf(state.stage) }
+    LaunchedEffect(state.stage) {
+        if (state.stage != seenStage.intValue) {
+            seenStage.intValue = state.stage
+            stageAnim.snapTo(0f)
+            stageAnim.animateTo(1f, tween(durationMillis = 320, easing = FastOutSlowInEasing))
+        }
+    }
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = stageAnim.value
+                translationY = (1f - stageAnim.value) * 28.dp.toPx()
+            },
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp
         ),
@@ -167,31 +195,13 @@ fun HomeScreen(
                     tint = LocalAppColors.current.warning
                 )
                 StatTile(
-                    label = "累计正确率",
-                    value = "${ov.accuracy}",
+                    label = "目前进度",
+                    value = "$stageProgressPct",
                     unit = "%",
                     modifier = Modifier.weight(1f),
                     container = LocalAppColors.current.cardPeach,
                     tint = MaterialTheme.colorScheme.primary
                 )
-            }
-        }
-
-        // ---------- 近 7 天 ----------
-        item {
-            AppCard {
-                SectionTitle(text = "近 7 天学习量")
-                Spacer(Modifier.height(14.dp))
-                WeekBarChart(stats = state.weekStats, goal = state.goal)
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Tag(text = "日均 ${
-                        if (state.weekStats.isEmpty()) 0
-                        else state.weekStats.sumOf { it.learned } / state.weekStats.size
-                    } 词")
-                    Spacer(Modifier.width(8.dp))
-                    Tag(text = "最长连续 ${ov.bestStreak} 天")
-                }
             }
         }
 

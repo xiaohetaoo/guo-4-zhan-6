@@ -29,6 +29,10 @@ import kotlinx.coroutines.withContext
 data class HomeUiState(
     val loading: Boolean = true,
     val stage: Int = WordDb.STAGE_CET4,
+    /** 当前级别的总词数，用于计算「目前进度」 */
+    val totalWords: Int = 0,
+    /** 当前级别的已学词数（注意：与 overview.totalLearned 的全局口径不同） */
+    val stageLearned: Int = 0,
     val overview: StudyOverview = StudyOverview(),
     val goal: Int = 20,
     val weekStats: List<DayStat> = emptyList(),
@@ -175,9 +179,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val overview = repo.overview()
                 val due = repo.dueWords(40).size
                 val queue = repo.todayQueue()
+                // 「目前进度」只算当前级别：全局已学数会把另一个级别也算进来，不能直接用
+                val stageIds = repo.wordDb.idsOfStage(repo.stage).toHashSet()
+                val learnedInStage = repo.userDb.states()
+                    .count { (id, st) -> st.level > 0 && id in stageIds }
                 HomeUiState(
                     loading = false,
                     stage = repo.stage,
+                    totalWords = repo.wordDb.countOfStage(repo.stage),
+                    stageLearned = learnedInStage,
                     overview = overview,
                     goal = repo.dailyGoal,
                     weekStats = repo.userDb.recentDays(7),
@@ -191,7 +201,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setStage(stage: Int) {
         repo.stage = stage
-        repo.currentUnit = repo.wordDb.firstUnit(stage)
+        // 学习进度按 word_id 独立存放，两个级别互不影响，切换时不需要重置任何进度。
+        // 这里只把新级别同步进首页状态，让按钮选中态与切换动画立即响应，
+        // 词数 / 进度等具体数据随后由 refreshAll() 异步补齐（本地库，通常几十毫秒）。
+        _home.update { it.copy(stage = stage) }
         refreshAll()
     }
 

@@ -46,10 +46,6 @@ class VocabRepository(context: Context) {
         get() = prefs.getInt(KEY_ICON_STYLE, LauncherIcons.STYLE_DEFAULT)
         set(value) = prefs.edit().putInt(KEY_ICON_STYLE, value).apply()
 
-    var currentUnit: Int
-        get() = prefs.getInt(KEY_UNIT, wordDb.firstUnit(stage))
-        set(value) = prefs.edit().putInt(KEY_UNIT, value).apply()
-
     /**
      * 明暗模式：[THEME_SYSTEM] 跟随系统、[THEME_LIGHT] 强制浅色、[THEME_DARK] 强制深色。
      * 默认跟随系统，但用户可以手动固定，不受系统深浅色开关影响。
@@ -115,16 +111,23 @@ class VocabRepository(context: Context) {
 
     // ---------------- 学习计划 ----------------
 
+    /**
+     * 到期待复习的词。
+     * 必须按**当前级别**过滤：学习记录是按 word_id 全局存放的，
+     * 不过滤的话在六级学习时会把四级的待复习词也排进队列。
+     */
     fun dueWords(limit: Int = 30): List<Word> {
         val now = System.currentTimeMillis()
         val ids = userDb.states().values
             .filter { it.level in 1..5 && it.nextReviewTs in 1..now }
             .sortedBy { it.nextReviewTs }
             .map { it.wordId }
-            .take(limit)
         if (ids.isEmpty()) return emptyList()
         val order = ids.withIndex().associate { it.value to it.index }
-        return wordDb.wordsByIds(ids).sortedBy { order[it.id] ?: Int.MAX_VALUE }
+        return wordDb.wordsByIds(ids)
+            .filter { it.stage == stage }
+            .sortedBy { order[it.id] ?: Int.MAX_VALUE }
+            .take(limit)
     }
 
     fun newWords(limit: Int): List<Word> {
@@ -353,7 +356,6 @@ class VocabRepository(context: Context) {
         private const val KEY_GOAL = "daily_goal"
         private const val KEY_AUTOSPEAK = "auto_speak"
         private const val KEY_RATE = "speech_rate"
-        private const val KEY_UNIT = "current_unit"
         private const val KEY_ICON_STYLE = "icon_style"
         private const val KEY_THEME = "theme_mode"
     }

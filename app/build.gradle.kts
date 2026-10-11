@@ -11,8 +11,8 @@ android {
         applicationId = "com.hdu.cetvocab"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.0.8"
+        versionCode = 15
+        versionName = "1.1.4"
         vectorDrawables { useSupportLibrary = true }
     }
 

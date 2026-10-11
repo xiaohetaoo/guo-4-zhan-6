@@ -97,6 +97,18 @@ class WordDb(private val context: Context) {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
 
+    /**
+     * 某一级别的全部词 id。
+     * 用于按「级别」统计学习进度——学习记录在 user_data.db、词表在 words.db，
+     * 是两个独立的 SQLite 库没法 JOIN，只能先取出本级 id 再与学习记录求交集。
+     */
+    fun idsOfStage(stage: Int): List<Int> =
+        open().rawQuery("SELECT id FROM words WHERE stage=?", arrayOf(stage.toString())).use { c ->
+            val ids = ArrayList<Int>(c.count)
+            while (c.moveToNext()) ids.add(c.getInt(0))
+            ids
+        }
+
     fun unitCount(stage: Int): Int =
         open().rawQuery(
             "SELECT COUNT(DISTINCT unit) FROM words WHERE stage=?", arrayOf(stage.toString())
@@ -115,16 +127,6 @@ class WordDb(private val context: Context) {
     /** 随机取词，用于生成干扰项 */
     fun randomWords(stage: Int, limit: Int): List<Word> =
         queryWords("stage=?", arrayOf(stage.toString()), "RANDOM() LIMIT $limit")
-
-    fun firstUnit(stage: Int): Int =
-        open().rawQuery(
-            "SELECT MIN(unit) FROM words WHERE stage=?", arrayOf(stage.toString())
-        ).use { if (it.moveToFirst()) it.getInt(0) else 1 }
-
-    fun lastUnit(stage: Int): Int =
-        open().rawQuery(
-            "SELECT MAX(unit) FROM words WHERE stage=?", arrayOf(stage.toString())
-        ).use { if (it.moveToFirst()) it.getInt(0) else 1 }
 
     companion object {
         const val DB_NAME = "words.db"
