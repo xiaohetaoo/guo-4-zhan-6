@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.R
+import com.hdu.cetvocab.data.VocabRepository
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AppCard
@@ -139,6 +140,55 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             ) {
                                 Text(
                                     text = "$g",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------- 外观 ----------
+            item {
+                AppCard {
+                    SectionTitle(text = "外观")
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "明暗模式",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = "默认跟随系统；也可以手动固定为浅色或深色，不再受系统深浅色开关影响。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            VocabRepository.THEME_SYSTEM to "跟随系统",
+                            VocabRepository.THEME_LIGHT to "浅色",
+                            VocabRepository.THEME_DARK to "深色"
+                        ).forEach { (mode, label) ->
+                            val selected = state.themeMode == mode
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                    .clickable { vm.setThemeMode(mode) }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                                     color = if (selected) MaterialTheme.colorScheme.onPrimary

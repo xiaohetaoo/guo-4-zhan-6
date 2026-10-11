@@ -109,6 +109,7 @@ data class ProfileUiState(
     val speechRate: Float = 0.92f,
     val stage: Int = WordDb.STAGE_CET4,
     val iconStyle: Int = LauncherIcons.STYLE_DEFAULT,
+    val themeMode: Int = VocabRepository.THEME_SYSTEM,
     val leaderboard: List<QuizRecord> = emptyList()
 )
 
@@ -195,6 +196,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         notify(
             if (style == LauncherIcons.STYLE_SIMPLE) "已选择简洁图标，回到桌面即可看到"
             else "已切回默认图标"
+        )
+    }
+
+    /** 切换明暗模式：跟随系统 / 始终浅色 / 始终深色。 */
+    fun setThemeMode(mode: Int) {
+        repo.themeMode = mode
+        _profile.update { it.copy(themeMode = mode) }
+        notify(
+            when (mode) {
+                VocabRepository.THEME_LIGHT -> "已切换为浅色模式"
+                VocabRepository.THEME_DARK -> "已切换为深色模式"
+                else -> "已改为跟随系统"
+            }
         )
     }
 
@@ -544,6 +558,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     speechRate = repo.speechRate,
                     stage = repo.stage,
                     iconStyle = repo.iconStyle,
+                    themeMode = repo.themeMode,
                     leaderboard = repo.userDb.quizRecords(50)
                 )
             }

@@ -50,6 +50,14 @@ class VocabRepository(context: Context) {
         get() = prefs.getInt(KEY_UNIT, wordDb.firstUnit(stage))
         set(value) = prefs.edit().putInt(KEY_UNIT, value).apply()
 
+    /**
+     * 明暗模式：[THEME_SYSTEM] 跟随系统、[THEME_LIGHT] 强制浅色、[THEME_DARK] 强制深色。
+     * 默认跟随系统，但用户可以手动固定，不受系统深浅色开关影响。
+     */
+    var themeMode: Int
+        get() = prefs.getInt(KEY_THEME, THEME_SYSTEM)
+        set(value) = prefs.edit().putInt(KEY_THEME, value).apply()
+
     // ---------------- 掌握等级 ----------------
 
     /** 等级含义：0 未学 1 模糊 2 认识 3 熟悉 4 掌握 5 精通 */
@@ -328,11 +336,21 @@ class VocabRepository(context: Context) {
     }
 
     companion object {
+        /** 明暗模式：跟随系统 */
+        const val THEME_SYSTEM = 0
+
+        /** 明暗模式：始终浅色 */
+        const val THEME_LIGHT = 1
+
+        /** 明暗模式：始终深色 */
+        const val THEME_DARK = 2
+
         private const val KEY_STAGE = "stage"
         private const val KEY_GOAL = "daily_goal"
         private const val KEY_AUTOSPEAK = "auto_speak"
         private const val KEY_RATE = "speech_rate"
         private const val KEY_UNIT = "current_unit"
         private const val KEY_ICON_STYLE = "icon_style"
+        private const val KEY_THEME = "theme_mode"
     }
 }
