@@ -54,6 +54,8 @@ data class LearnUiState(
     val learnedWords: Int = 0,
     val query: String = "",
     val searchResult: List<Word> = emptyList(),
+    val allWords: List<Word> = emptyList(),
+    val allWordsLoading: Boolean = false,
     val favWords: List<Word> = emptyList(),
     val wrongWords: List<Word> = emptyList()
 )
@@ -259,6 +261,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun previewAllWords() {
+        val stage = repo.stage
+        if (_learn.value.stage == stage && _learn.value.allWords.isNotEmpty()) return
+        _learn.update { it.copy(allWordsLoading = true, allWords = emptyList()) }
+        viewModelScope.launch {
+            val words = withContext(Dispatchers.IO) { repo.wordDb.wordsOfStage(stage) }
+            _learn.update {
+                it.copy(stage = stage, allWords = words, allWordsLoading = false)
+            }
+        }
+    }
+
     fun search(keyword: String) {
         _learn.update { it.copy(query = keyword) }
         if (keyword.isBlank()) {
@@ -407,14 +421,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startQuiz(unit: Int) {
         viewModelScope.launch {
-            val questions = withContext(Dispatchers.IO) { repo.buildQuiz(unit, 10) }
+            val challengeStage = repo.stage
+            val questions = withContext(Dispatchers.IO) {
+                if (unit < 0) repo.buildStageQuiz(count = 30) else repo.buildQuiz(unit, 10)
+            }
             if (questions.isEmpty()) {
-                notify("该单元单词不足，换一个单元试试")
+                notify(if (unit < 0) "全词挑战暂不可用" else "该单元单词不足，换一个单元试试")
                 return@launch
             }
             _quiz.value = QuizUiState(
                 active = true,
-                stage = repo.stage,
+                stage = challengeStage,
                 unit = unit,
                 questions = questions,
                 startTs = System.currentTimeMillis()

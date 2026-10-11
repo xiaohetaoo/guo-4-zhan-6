@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,11 +55,11 @@ fun LearnScreen(
     onOpenUnit: (Int) -> Unit,
     onOpenWord: (Int) -> Unit,
     onStartFav: () -> Unit,
-    onStartWrong: () -> Unit,
-    onQuizUnit: (Int) -> Unit
+    onStartWrong: () -> Unit
 ) {
     val state by vm.learn.collectAsState()
     var tab by remember { mutableIntStateOf(0) }
+    var showingAllWords by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // ---------- 顶部：阶段 + 搜索 ----------
@@ -78,7 +79,27 @@ fun LearnScreen(
                     )
                 }
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(LocalAppColors.current.cardSky)
+                    .clickable {
+                        showingAllWords = true
+                        vm.previewAllWords()
+                    }
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("预览全部单词", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text("像好友列表一样按字母快速浏览 ${state.totalWords} 个词", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text("›", fontSize = 22.sp, color = MaterialTheme.colorScheme.primary)
+            }
+            Spacer(Modifier.height(10.dp))
             OutlinedTextField(
                 value = state.query,
                 onValueChange = { vm.search(it) },
@@ -125,6 +146,56 @@ fun LearnScreen(
             return
         }
 
+        if (showingAllWords) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "‹ 返回词库",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.clickable { showingAllWords = false }.padding(vertical = 6.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = "全部 ${state.allWords.size} 个单词",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            if (state.allWordsLoading) {
+                EmptyHint("正在加载全部单词…")
+            } else {
+                val groups = state.allWords.groupBy { it.word.firstOrNull()?.uppercaseChar()?.toString() ?: "#" }
+                LazyColumn(
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    groups.forEach { (letter, words) ->
+                        item(key = "letter-$letter") {
+                            Text(
+                                text = letter,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        items(words, key = { "all-${it.id}" }) { word ->
+                            WordRow(w = word, onClick = { onOpenWord(word.id) })
+                        }
+                    }
+                }
+            }
+            return
+        }
+
         // ---------- 分段 ----------
         Row(
             modifier = Modifier
@@ -163,7 +234,7 @@ fun LearnScreen(
         Spacer(Modifier.height(12.dp))
 
         when (tab) {
-            0 -> UnitList(state.units, onOpenUnit, onQuizUnit)
+            0 -> UnitList(state.units, onOpenUnit)
             1 -> WordListOrEmpty(
                 words = state.favWords,
                 empty = "还没有收藏的生词",
@@ -187,8 +258,7 @@ fun LearnScreen(
 @Composable
 private fun UnitList(
     units: List<UnitItem>,
-    onOpenUnit: (Int) -> Unit,
-    onQuizUnit: (Int) -> Unit
+    onOpenUnit: (Int) -> Unit
 ) {
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
@@ -260,19 +330,11 @@ private fun UnitList(
                         )
                     }
                     Spacer(Modifier.width(10.dp))
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        PillButton(
-                            text = "学习",
-                            container = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ) { onOpenUnit(u.unit) }
-                        Spacer(Modifier.height(6.dp))
-                        PillButton(
-                            text = "闯关",
-                            container = LocalAppColors.current.cardPeach,
-                            contentColor = MaterialTheme.colorScheme.primary
-                        ) { onQuizUnit(u.unit) }
-                    }
+                    PillButton(
+                        text = "学习",
+                        container = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ) { onOpenUnit(u.unit) }
                 }
             }
         }

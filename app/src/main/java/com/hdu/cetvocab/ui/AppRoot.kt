@@ -152,16 +152,7 @@ private fun AppNavHost(
                 onStartToday = {
                     vm.startTodayStudy()
                     nav.navigate(Routes.STUDY)
-                },
-                onOpenUnit = { unit ->
-                    vm.startUnitStudy(unit)
-                    nav.navigate(Routes.STUDY)
-                },
-                onOpenLearn = { nav.navigate(Routes.LEARN) },
-                onOpenQuiz = { nav.navigate(Routes.QUIZ) },
-                onOpenLeaderboard = { nav.navigate(Routes.LEADERBOARD) },
-                onOpenAchievements = { nav.navigate(Routes.ACHIEVEMENTS) },
-                onOpenWord = { id -> nav.navigate("${Routes.WORD}/$id") }
+                }
             )
         }
 
@@ -180,17 +171,6 @@ private fun AppNavHost(
                 onStartWrong = {
                     vm.startWrongStudy()
                     nav.navigate(Routes.STUDY)
-                },
-                onQuizUnit = { unit ->
-                    // 词库页每个单元上的「闯关」按钮：先出题，再跳到闯关页。
-                    // 之前只调了 startQuiz() 没导航，点了界面毫无反应（死按钮）。
-                    // 这里沿用底部标签页的跳转方式，保证底部导航高亮正确、返回栈不堆积。
-                    vm.startQuiz(unit)
-                    nav.navigate(Routes.QUIZ) {
-                        popUpTo(Routes.HOME) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
                 }
             )
         }

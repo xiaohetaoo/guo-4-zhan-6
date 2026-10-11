@@ -43,13 +43,7 @@ import com.hdu.cetvocab.ui.theme.LocalAppColors
 @Composable
 fun HomeScreen(
     vm: AppViewModel,
-    onStartToday: () -> Unit,
-    onOpenUnit: (Int) -> Unit,
-    onOpenLearn: () -> Unit,
-    onOpenQuiz: () -> Unit,
-    onOpenLeaderboard: () -> Unit,
-    onOpenAchievements: () -> Unit,
-    onOpenWord: (Int) -> Unit
+    onStartToday: () -> Unit
 ) {
     val state by vm.home.collectAsState()
     val ov = state.overview
@@ -201,125 +195,26 @@ fun HomeScreen(
             }
         }
 
-        // ---------- 最近闯关 ----------
+        // ---------- 近 7 天 ----------
         item {
             AppCard {
-                SectionTitle(
-                    text = "最近闯关成绩",
-                    trailing = {
-                        Text(
-                            text = "排行榜 ›",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onOpenLeaderboard() }
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                )
+                SectionTitle(text = "近 7 天学习量")
+                Spacer(Modifier.height(14.dp))
+                WeekBarChart(stats = state.weekStats, goal = state.goal)
                 Spacer(Modifier.height(10.dp))
-                if (state.recentQuizzes.isEmpty()) {
-                    Text(
-                        text = "还没有闯关记录，去「闯关」挑战一下吧",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 10.dp)
-                    )
-                } else {
-                    state.recentQuizzes.forEach { r ->
-                        QuizRecordRow(r)
-                        Spacer(Modifier.height(8.dp))
-                    }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Tag(text = "日均 ${
+                        if (state.weekStats.isEmpty()) 0
+                        else state.weekStats.sumOf { it.learned } / state.weekStats.size
+                    } 词")
+                    Spacer(Modifier.width(8.dp))
+                    Tag(text = "最长连续 ${ov.bestStreak} 天")
                 }
             }
         }
 
-        // ---------- 快捷入口 ----------
-        item {
-            AppCard {
-                SectionTitle(text = "快捷入口")
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    QuickAction("词库", "按单元学", LocalAppColors.current.cardMint, Modifier.weight(1f), onOpenLearn)
-                    QuickAction("闯关", "单元测验", LocalAppColors.current.cardAmber, Modifier.weight(1f), onOpenQuiz)
-                    QuickAction("成就", "已解锁 ${ov.quizPlayed} 次闯关", LocalAppColors.current.cardSky, Modifier.weight(1f), onOpenAchievements)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun QuizRecordRow(r: QuizRecord) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "${WordDb.stageLabel(r.stage)} · 第 ${r.unit} 单元",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = "正确 ${r.correct}/${r.total} · 正确率 ${r.accuracy}%",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Text(
-            text = "${r.score}",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Spacer(Modifier.width(3.dp))
-        Text(
-            text = "分",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 2.dp)
-        )
-    }
-}
-
-@Composable
-private fun QuickAction(
-    title: String,
-    subtitle: String,
-    container: androidx.compose.ui.graphics.Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(container)
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = subtitle,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            maxLines = 2
-        )
+        // 注：原「最近闯关成绩」「快捷入口」两个区块已并入底部导航与「我的」页，
+        //     避免在首页与底部 tab / 个人页之间出现重复入口。
     }
 }
 

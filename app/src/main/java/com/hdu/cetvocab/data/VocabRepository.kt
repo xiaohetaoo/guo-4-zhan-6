@@ -160,9 +160,19 @@ class VocabRepository(context: Context) {
 
     // ---------------- 闯关 ----------------
 
-    fun buildQuiz(unit: Int, count: Int, spellingRatio: Float = 0.25f): List<QuizQuestion> {
-        val pool = wordDb.wordsOfUnit(stage, unit)
-        if (pool.size < 4) return emptyList()
+    fun buildQuiz(unit: Int, count: Int, spellingRatio: Float = 0.25f): List<QuizQuestion> =
+        buildQuizFromPool(wordDb.wordsOfUnit(stage, unit), count, spellingRatio)
+
+    /** 全阶段挑战：从当前级别完整词库随机抽题，unit 以 -1 标记为全词挑战。 */
+    fun buildStageQuiz(count: Int = 30, spellingRatio: Float = 0.25f): List<QuizQuestion> =
+        buildQuizFromPool(wordDb.wordsOfStage(stage), count, spellingRatio)
+
+    private fun buildQuizFromPool(
+        pool: List<Word>,
+        count: Int,
+        spellingRatio: Float
+    ): List<QuizQuestion> {
+        if (pool.size < 4 || count <= 0) return emptyList()
         val random = Random(System.nanoTime())
         val questions = pool.shuffled(random).take(count).map { word ->
             val spelling = random.nextFloat() < spellingRatio

@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,7 +40,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -320,21 +326,25 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     ActionRow(
                         title = "导出学习记录（CSV）",
                         desc = "含掌握等级、错误次数、上次学习与下次复习时间",
+                        iconKind = 1,
                         onClick = { runExport("学习记录已导出") { vm.backup.exportStudyCsv() } }
                     )
                     ActionRow(
                         title = "导出单词本（CSV）",
                         desc = "仅导出收藏的生词，按字母序排列",
+                        iconKind = 2,
                         onClick = { runExport("单词本已导出") { vm.backup.exportFavCsv() } }
                     )
                     ActionRow(
                         title = "备份数据（JSON）",
                         desc = "完整备份学习进度、成绩、成就与设置",
+                        iconKind = 3,
                         onClick = { runExport("数据已备份") { vm.backup.backupJson() } }
                     )
                     ActionRow(
                         title = "恢复数据",
                         desc = "从备份文件恢复，将覆盖当前全部学习数据",
+                        iconKind = 4,
                         onClick = {
                             scope.launch {
                                 runCatching { withContext(Dispatchers.IO) { vm.backup.listBackups() } }
@@ -356,9 +366,19 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             .clip(RoundedCornerShape(16.dp))
                             .background(LocalAppColors.current.danger.copy(alpha = 0.10f))
                             .clickable { showReset = true }
-                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(LocalAppColors.current.danger),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            ActionIcon(kind = 0)
+                        }
+                        Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "清空全部学习数据",
@@ -514,19 +534,137 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
 }
 
 @Composable
+private fun ActionIcon(kind: Int) {
+    val stroke = Color.White
+    val sw = 2.2.dp
+    Canvas(modifier = Modifier.size(20.dp)) {
+        val s = size
+        val strokeW = sw.toPx()
+        when (kind) {
+            1 -> { // 下载：向下箭头落到底线
+                val ax = s.width / 2f
+                drawLine(stroke, Offset(ax, s.height * 0.18f), Offset(ax, s.height * 0.70f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                val head = Path().apply {
+                    moveTo(s.width * 0.26f, s.height * 0.50f)
+                    lineTo(ax, s.height * 0.74f)
+                    lineTo(s.width * 0.74f, s.height * 0.50f)
+                }
+                drawPath(head, stroke,
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawLine(stroke, Offset(s.width * 0.22f, s.height * 0.90f), Offset(s.width * 0.78f, s.height * 0.90f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+            }
+            2 -> { // 心形（收藏）
+                val cx = s.width / 2f
+                val cy = s.height * 0.55f
+                val r = s.width * 0.18f
+                val left = Path().apply {
+                    moveTo(cx, s.height * 0.86f)
+                    cubicTo(s.width * 0.05f, s.height * 0.62f,
+                            s.width * 0.05f, s.height * 0.30f,
+                            cx - r, cy - r * 0.2f)
+                    cubicTo(s.width * 0.30f, s.height * 0.10f,
+                            cx, cy - r * 0.5f,
+                            cx, cy + r * 0.3f)
+                    cubicTo(cx, cy - r * 0.5f,
+                            s.width * 0.70f, s.height * 0.10f,
+                            cx + r, cy - r * 0.2f)
+                    cubicTo(s.width * 0.95f, s.height * 0.30f,
+                            s.width * 0.95f, s.height * 0.62f,
+                            cx, s.height * 0.86f)
+                    close()
+                }
+                drawPath(left, stroke,
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            3 -> { // 备份：磁盘（圆角矩形 + 上方缺口）
+                val p = Path().apply {
+                    moveTo(s.width * 0.18f, s.height * 0.32f)
+                    lineTo(s.width * 0.36f, s.height * 0.18f)
+                    lineTo(s.width * 0.82f, s.height * 0.18f)
+                    lineTo(s.width * 0.82f, s.height * 0.82f)
+                    lineTo(s.width * 0.18f, s.height * 0.82f)
+                    close()
+                }
+                drawPath(p, stroke,
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawLine(stroke, Offset(s.width * 0.32f, s.height * 0.50f), Offset(s.width * 0.68f, s.height * 0.50f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+            }
+            4 -> { // 恢复：向上箭头（从底线升起）
+                val ax = s.width / 2f
+                drawLine(stroke, Offset(ax, s.height * 0.30f), Offset(ax, s.height * 0.82f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                val head = Path().apply {
+                    moveTo(s.width * 0.26f, s.height * 0.50f)
+                    lineTo(ax, s.height * 0.26f)
+                    lineTo(s.width * 0.74f, s.height * 0.50f)
+                }
+                drawPath(head, stroke,
+                    style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawLine(stroke, Offset(s.width * 0.22f, s.height * 0.12f), Offset(s.width * 0.78f, s.height * 0.12f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+            }
+            else -> { // 清空：垃圾桶
+                val lx = s.width * 0.22f
+                val rx = s.width * 0.78f
+                drawLine(stroke, Offset(lx - s.width * 0.06f, s.height * 0.26f),
+                    Offset(rx + s.width * 0.06f, s.height * 0.26f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                drawLine(stroke, Offset(s.width * 0.40f, s.height * 0.12f),
+                    Offset(s.width * 0.60f, s.height * 0.12f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                drawLine(stroke, Offset(lx, s.height * 0.26f),
+                    Offset(lx + s.width * 0.06f, s.height * 0.90f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                drawLine(stroke, Offset(lx + s.width * 0.06f, s.height * 0.90f),
+                    Offset(rx - s.width * 0.06f, s.height * 0.90f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                drawLine(stroke, Offset(rx - s.width * 0.06f, s.height * 0.26f),
+                    Offset(rx, s.height * 0.90f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                drawLine(stroke, Offset(s.width * 0.40f, s.height * 0.40f),
+                    Offset(s.width * 0.42f, s.height * 0.78f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                drawLine(stroke, Offset(s.width * 0.50f, s.height * 0.40f),
+                    Offset(s.width * 0.50f, s.height * 0.78f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+                drawLine(stroke, Offset(s.width * 0.58f, s.height * 0.40f),
+                    Offset(s.width * 0.60f, s.height * 0.78f),
+                    strokeWidth = strokeW, cap = StrokeCap.Round)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ActionRow(
     title: String,
     desc: String,
+    iconKind: Int,
     onClick: () -> Unit
 ) {
+    val accent = MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .background(accent.copy(alpha = 0.08f))
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(accent),
+            contentAlignment = Alignment.Center
+        ) {
+            ActionIcon(kind = iconKind)
+        }
+        Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,

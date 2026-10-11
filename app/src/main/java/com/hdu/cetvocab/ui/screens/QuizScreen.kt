@@ -71,14 +71,24 @@ fun QuizScreen(
     when {
         state.finished -> QuizResult(state, onExit, onAgain = { vm.startQuiz(state.unit) }, vm = vm)
         state.active -> QuizPlay(state, vm, onSpeak, onQuit = { vm.exitQuiz() })
-        else -> QuizPicker(learn.units, learn.stage, onPick = { vm.startQuiz(it) })
+        else -> QuizPicker(
+            units = learn.units,
+            stage = learn.stage,
+            onPick = { vm.startQuiz(it) },
+            onFullStage = { vm.startQuiz(-1) }
+        )
     }
 }
 
 // ---------------------------------------------------------------- 选择单元
 
 @Composable
-private fun QuizPicker(units: List<UnitItem>, stage: Int, onPick: (Int) -> Unit) {
+private fun QuizPicker(
+    units: List<UnitItem>,
+    stage: Int,
+    onPick: (Int) -> Unit,
+    onFullStage: () -> Unit
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Text(
@@ -95,11 +105,30 @@ private fun QuizPicker(units: List<UnitItem>, stage: Int, onPick: (Int) -> Unit)
             Spacer(Modifier.height(12.dp))
             AppCard(color = LocalAppColors.current.cardAmber, padding = 14.dp) {
                 Text(
-                    text = "🎯 玩法：答对得分并累积连击，连击越高单题得分越多；" +
-                        "拼写题比选义题分值更高。每关成绩都会进入「历次成绩排行榜」。",
+                    text = "玩法：答对得分并累积连击，拼写题分值更高。选择下方单元开始 10 题挑战。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+            }
+            Spacer(Modifier.height(10.dp))
+            AppCard(color = LocalAppColors.current.cardPeach, padding = 14.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${WordDb.stageLabel(stage)}全词挑战",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = "从本级全部单词中随机抽取 30 题",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(onClick = onFullStage) { Text("开始挑战") }
+                }
             }
         }
         if (units.isEmpty()) {
@@ -184,7 +213,7 @@ private fun QuizPlay(
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "${WordDb.stageLabel(state.stage)} · 第 ${state.unit} 单元",
+                        text = if (state.unit < 0) "${WordDb.stageLabel(state.stage)} · 全词挑战" else "${WordDb.stageLabel(state.stage)} · 第 ${state.unit} 单元",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -482,8 +511,7 @@ private fun QuizResult(
 ) {
     val total = state.total
     val accuracy = if (total == 0) 0 else state.correctCount * 100 / total
-    val seconds = if (state.lastRecord == null) 0
-    else (state.lastRecord!!.durationMs / 1000).toInt()
+    val seconds = ((state.lastRecord?.durationMs ?: 0L) / 1000).toInt()
 
     Column(
         modifier = Modifier
@@ -598,7 +626,7 @@ private fun QuizResult(
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            text = "返回后可继续选择其他单元",
+            text = if (state.unit < 0) "返回后可重新挑战本级全部词汇" else "返回后可继续选择其他单元",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.clickable { vm.exitQuiz() }
