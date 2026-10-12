@@ -38,14 +38,20 @@
 
     <!-- 闯关 -->
     <string name="quiz_quit_title">退出本次闯关？</string>
+    <string name="practice_quit_title">退出本次练习？</string>
+    <string name="action_back_practice">返回拓展练习</string>
     <string name="quiz_quit_message">本局进度与成绩不会保存。</string>
     <string name="action_continue_quiz">继续答题</string>
     <string name="action_start_challenge">开始挑战</string>
+    <string name="action_start_practice">开始练习</string>
     <string name="quiz_lexicon_not_ready">词库尚未就绪</string>
     <string name="quiz_topic_confusable">易混词辨析</string>
     <string name="quiz_topic_confusable_desc">给中文释义，从四个形近词中挑出正确单词 · 10 题</string>
     <string name="quiz_topic_translation">真题句子翻译</string>
     <string name="quiz_topic_translation_desc">中文句选出全部正确译法，可多选 · 10 题</string>
+    <!-- 拓展资源练习：入口在「我的」页成就卡下方，成绩不参与排行榜排名 -->
+    <string name="profile_extension_title">拓展资源练习</string>
+    <string name="profile_extension_note">专项巩固，随时可练 · 不计入排行榜排名</string>
     <string name="hint_input_word">输入英文单词</string>
     <string name="action_play_again">再来一局</string>
     <string name="action_view_leaderboard">查看排行榜</string>

@@ -79,6 +79,20 @@ const val QUIZ_SCOPE_ALL = -1
 const val QUIZ_SCOPE_CONFUSABLE = -101
 const val QUIZ_SCOPE_TRANSLATION = -102
 
+/**
+ * 拓展资源练习：入口在「我的」页成就卡下方，定位是**练习**而不是闯关。
+ *
+ * 不参与排行榜排名 —— [com.hdu.cetvocab.data.UserDb.quizRecords]（榜单列表）、
+ * [com.hdu.cetvocab.data.UserDb.bestScore]（最高分）、
+ * [com.hdu.cetvocab.data.UserDb.quizPlayedCount]（闯关次数）三处统计都会把它们排除。
+ *
+ * 成绩记录本身仍然照常写入 `quiz_record`：成就系统要靠它按 unit 统计
+ * 「易混词辨析 / 翻译全对 5 关」这类进度（见 `quizPerfectCountOfUnit`），
+ * 只是这些记录不再进入排名口径。学习时长（`quizTotalMs`）也照常计入，
+ * 因为那本来就是实打实的学习时间，与排名无关。
+ */
+val EXTENSION_QUIZ_SCOPES = listOf(QUIZ_SCOPE_CONFUSABLE, QUIZ_SCOPE_TRANSLATION)
+
 /** 首字母对应的闯关范围值；非 A–Z 字母返回 null */
 fun quizScopeOfLetter(letter: Char): Int? {
     val upper = letter.uppercaseChar()

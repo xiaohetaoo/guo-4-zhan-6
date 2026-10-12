@@ -9,6 +9,16 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 /**
+ * 「参与排名」的闯关记录过滤条件，供榜单 / 最高分 / 闯关次数三处统计复用。
+ *
+ * 拓展资源练习（[EXTENSION_QUIZ_SCOPES]）的记录照常入库（成就系统要按 unit 统计），
+ * 但不算进排名口径，所以统一在这里拼一次 SQL 片段，避免三处各写一遍 `NOT IN` 写歪。
+ * 这些 unit 值都是本文件内的常量整数，不存在注入风险。
+ */
+private val RANKED_ONLY: String =
+    "unit NOT IN (" + EXTENSION_QUIZ_SCOPES.joinToString(",") { it.toString() } + ")"
+
+/**
  * 用户本地数据：学习进度、答题记录、闯关成绩、成就解锁。
  * 全部保存在设备私有目录，不上传任何服务器。
  */
@@ -255,7 +265,7 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         val list = ArrayList<QuizRecord>()
         readableDatabase.rawQuery(
             "SELECT id,stage,unit,mode,score,total,correct,max_combo,duration_ms,ts " +
-                "FROM quiz_record ORDER BY score DESC, ts DESC LIMIT $limit", null
+                "FROM quiz_record WHERE $RANKED_ONLY ORDER BY score DESC, ts DESC LIMIT $limit", null
         ).use { c ->
             while (c.moveToNext()) {
                 list.add(
@@ -273,7 +283,7 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         val list = ArrayList<QuizRecord>()
         readableDatabase.rawQuery(
             "SELECT id,stage,unit,mode,score,total,correct,max_combo,duration_ms,ts " +
-                "FROM quiz_record ORDER BY ts DESC LIMIT $limit", null
+                "FROM quiz_record WHERE $RANKED_ONLY ORDER BY ts DESC LIMIT $limit", null
         ).use { c ->
             while (c.moveToNext()) {
                 list.add(
@@ -288,12 +298,16 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
     }
 
     fun bestScore(): Int =
-        readableDatabase.rawQuery("SELECT MAX(score) FROM quiz_record", null).use {
+        readableDatabase.rawQuery(
+            "SELECT MAX(score) FROM quiz_record WHERE $RANKED_ONLY", null
+        ).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
 
     fun quizPlayedCount(): Int =
-        readableDatabase.rawQuery("SELECT COUNT(*) FROM quiz_record", null).use {
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM quiz_record WHERE $RANKED_ONLY", null
+        ).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
 

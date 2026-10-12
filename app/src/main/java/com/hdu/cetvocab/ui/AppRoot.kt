@@ -242,7 +242,27 @@ private fun AppNavHost(
             ProfileScreen(
                 vm = vm,
                 onOpenAchievements = { nav.navigate(Routes.ACHIEVEMENTS) },
-                onOpenSettings = { nav.navigate(Routes.SETTINGS) }
+                onOpenSettings = { nav.navigate(Routes.SETTINGS) },
+                // 拓展资源练习：入口在「我的」页，但答题界面复用闯关页。
+                // 先让 ViewModel 装好对应题库，再跳到闯关标签 ——
+                // 导航选项与底部标签点击**完全一致**（popUpTo(HOME) + saveState），
+                // 否则从「我的」跳过去会在返回栈里多压一层，返回行为与切标签不一样。
+                onOpenConfusable = {
+                    vm.startConfusableQuiz()
+                    nav.navigate(Routes.QUIZ) {
+                        popUpTo(Routes.HOME) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+                onOpenTranslation = {
+                    vm.startTranslationQuiz()
+                    nav.navigate(Routes.QUIZ) {
+                        popUpTo(Routes.HOME) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
             )
         }
 

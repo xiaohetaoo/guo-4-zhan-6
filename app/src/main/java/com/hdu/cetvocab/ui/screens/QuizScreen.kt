@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
@@ -67,6 +68,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.R
+import com.hdu.cetvocab.data.EXTENSION_QUIZ_SCOPES
 import com.hdu.cetvocab.data.QUIZ_SCOPE_ALL
 import com.hdu.cetvocab.data.QUIZ_SCOPE_CONFUSABLE
 import com.hdu.cetvocab.data.QUIZ_SCOPE_TRANSLATION
@@ -127,6 +129,7 @@ fun QuizScreen(
         state.finished -> QuizResult(
             state,
             onOpenLeaderboard = onOpenLeaderboard,
+            onExit = onExit,
             onAgain = {
                 // 两个专题关卡有自己的出题逻辑，不能直接走 startQuiz(unit)，
                 // 否则会被当成「全词挑战」重新抽一遍选义/拼写题。
@@ -157,8 +160,6 @@ fun QuizScreen(
             stage = learn.stage,
             onPick = { vm.startLetterQuiz(it) },
             onFullStage = { vm.startQuiz(QUIZ_SCOPE_ALL) },
-            onConfusable = { vm.startConfusableQuiz() },
-            onTranslation = { vm.startTranslationQuiz() },
             onOpenLeaderboard = onOpenLeaderboard
         )
     }
@@ -166,7 +167,16 @@ fun QuizScreen(
     if (confirmQuit) {
         AlertDialog(
             onDismissRequest = { confirmQuit = false },
-            title = { Text(stringResource(R.string.quiz_quit_title)) },
+            title = {
+                // 拓展练习不叫「闯关」，退出确认的措辞跟着换，
+                // 免得在「我的 → 易混词辨析」里点返回却弹出「退出本次闯关？」
+                Text(
+                    stringResource(
+                        if (state.unit in EXTENSION_QUIZ_SCOPES) R.string.practice_quit_title
+                        else R.string.quiz_quit_title
+                    )
+                )
+            },
             text = { Text(stringResource(R.string.quiz_quit_message)) },
             confirmButton = {
                 TextButton(onClick = {
@@ -191,170 +201,144 @@ private fun QuizPicker(
     stage: Int,
     onPick: (Char) -> Unit,
     onFullStage: () -> Unit,
-    onConfusable: () -> Unit,
-    onTranslation: () -> Unit,
     onOpenLeaderboard: () -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-            Text(
-                text = "单词闯关",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                text = "${WordDb.stageLabel(stage)}词库 · 每关 10 题 · 选义 / 拼写 / 辨析 / 翻译四种题型",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(12.dp))
-            AppCard(color = LocalAppColors.current.cardAmber, padding = 14.dp) {
+    /*
+     * 整页滑动：标题 / 玩法 / 全词挑战 / 排行榜入口与首字母网格放在**同一个**滚动容器里，
+     * 从顶部一路滑到底不会中途被截断（此前表头是固定的 Column，只有网格在滚）。
+     *
+     * 实现上用「单个 LazyVerticalGrid + 全宽表头项」，而不是「LazyColumn 里嵌网格」：
+     * 后者在 Compose 里是非法的（两个纵向 Lazy 容器嵌套，内层拿不到高度约束，直接崩）。
+     * 表头用 GridItemSpan(maxLineSpan) 横跨全部 4 列，视觉上与独占一行毫无区别，
+     * 但会跟着网格一起滚走。
+     *
+     * 两个专题关卡（易混词辨析 / 真题句子翻译）已移到「我的」页的拓展资源练习区，
+     * 这里不再出现 —— 它们不参与排行榜排名，与「闯关」的定位不同。
+     */
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item(key = "picker_header", span = { GridItemSpan(maxLineSpan) }) {
+            Column {
                 Text(
-                    text = "玩法：答对得分并累积连击，拼写题分值更高。选择下方首字母开始 10 题挑战。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
+                    text = "单词闯关",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
                 )
-            }
-            Spacer(Modifier.height(10.dp))
-            AppCard(color = LocalAppColors.current.cardPeach, padding = 14.dp) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${WordDb.stageLabel(stage)}全词挑战",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            text = "从本级全部单词中随机抽取 30 题",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Button(onClick = onFullStage) { Text(stringResource(R.string.action_start_challenge)) }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            TopicCard(
-                title = stringResource(R.string.quiz_topic_confusable),
-                desc = stringResource(R.string.quiz_topic_confusable_desc),
-                container = LocalAppColors.current.cardSky,
-                onClick = onConfusable
-            )
-            Spacer(Modifier.height(10.dp))
-            TopicCard(
-                title = stringResource(R.string.quiz_topic_translation),
-                desc = stringResource(R.string.quiz_topic_translation_desc),
-                container = LocalAppColors.current.cardMint,
-                onClick = onTranslation
-            )
-            Spacer(Modifier.height(10.dp))
-            AppCard(padding = 6.dp) {
-                MenuRow(
-                    title = "历次成绩排行榜",
-                    subtitle = stringResource(R.string.leaderboard_entry_desc),
-                    accent = LocalAppColors.current.cardAmber,
-                    onClick = onOpenLeaderboard
-                )
-            }
-        }
-        if (letters.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Spacer(Modifier.height(3.dp))
                 Text(
-                    text = stringResource(R.string.quiz_lexicon_not_ready),
+                    text = "${WordDb.stageLabel(stage)}词库 · 每关 10 题 · 选义 / 拼写两种题型",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            }
-            return
-        }
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(letters, key = { it.letter }) { item ->
-                // 选义题需要 4 个不同选项，词数不足的字母（如 X）无法出题，置灰不可点
-                val usable = item.total >= 4
-                val cellInteraction = remember { MutableInteractionSource() }
-                val accent = when {
-                    !usable -> MaterialTheme.colorScheme.onSurfaceVariant
-                    item.done -> LocalAppColors.current.success
-                    else -> MaterialTheme.colorScheme.primary
+                Spacer(Modifier.height(12.dp))
+                AppCard(color = LocalAppColors.current.cardAmber, padding = 14.dp) {
+                    Text(
+                        text = "玩法：答对得分并累积连击，拼写题分值更高。选择下方首字母开始 10 题挑战。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
-                Column(
+                Spacer(Modifier.height(10.dp))
+                AppCard(color = LocalAppColors.current.cardPeach, padding = 14.dp) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${WordDb.stageLabel(stage)}全词挑战",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            Text(
+                                text = "从本级全部单词中随机抽取 30 题",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Button(onClick = onFullStage) {
+                            Text(stringResource(R.string.action_start_challenge))
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                AppCard(padding = 6.dp) {
+                    MenuRow(
+                        title = "历次成绩排行榜",
+                        subtitle = stringResource(R.string.leaderboard_entry_desc),
+                        accent = LocalAppColors.current.cardAmber,
+                        onClick = onOpenLeaderboard
+                    )
+                }
+            }
+        }
+
+        if (letters.isEmpty()) {
+            item(key = "picker_empty", span = { GridItemSpan(maxLineSpan) }) {
+                Box(
                     modifier = Modifier
-                        .springPress(cellInteraction)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(
-                            when {
-                                !usable -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                item.done -> LocalAppColors.current.cardMint
-                                else -> MaterialTheme.colorScheme.surface
-                            }
-                        )
-                        .border(
-                            1.dp,
-                            MaterialTheme.colorScheme.outlineVariant,
-                            RoundedCornerShape(18.dp)
-                        )
-                        .clickable(
-                            interactionSource = cellInteraction,
-                            indication = null,
-                            enabled = usable
-                        ) { onPick(item.letter) }
-                        .padding(vertical = 14.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .fillMaxWidth()
+                        .padding(vertical = 48.dp),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "${item.letter}",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = accent
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = if (usable) "${item.learned}/${item.total}" else "词数不足",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = stringResource(R.string.quiz_lexicon_not_ready),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
+            return@LazyVerticalGrid
         }
-    }
-}
 
-/**
- * 专题关卡入口卡片。
- * 与「全词挑战」共用同一套标题 + 说明 + 按钮的三段式结构，
- * 只是底色按专题区分，方便在首字母网格上方一眼分辨。
- */
-@Composable
-private fun TopicCard(
-    title: String,
-    desc: String,
-    container: Color,
-    onClick: () -> Unit
-) {
-    AppCard(color = container, padding = 14.dp) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
+        items(letters, key = { "letter_${it.letter}" }) { item ->
+            // 选义题需要 4 个不同选项，词数不足的字母（如 X）无法出题，置灰不可点
+            val usable = item.total >= 4
+            val cellInteraction = remember { MutableInteractionSource() }
+            val accent = when {
+                !usable -> MaterialTheme.colorScheme.onSurfaceVariant
+                item.done -> LocalAppColors.current.success
+                else -> MaterialTheme.colorScheme.primary
+            }
+            Column(
+                modifier = Modifier
+                    .springPress(cellInteraction)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        when {
+                            !usable -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            item.done -> LocalAppColors.current.cardMint
+                            else -> MaterialTheme.colorScheme.surface
+                        }
+                    )
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(18.dp)
+                    )
+                    .clickable(
+                        interactionSource = cellInteraction,
+                        indication = null,
+                        enabled = usable
+                    ) { onPick(item.letter) }
+                    .padding(vertical = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
+                    text = "${item.letter}",
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = accent
                 )
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = desc,
+                    text = if (usable) "${item.learned}/${item.total}" else "词数不足",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Button(onClick = onClick) { Text(stringResource(R.string.action_start_challenge)) }
         }
     }
 }
@@ -1120,11 +1104,20 @@ private fun QuizResult(
     state: com.hdu.cetvocab.ui.QuizUiState,
     onOpenLeaderboard: () -> Unit,
     onAgain: () -> Unit,
+    onExit: () -> Unit,
     vm: AppViewModel
 ) {
     val total = state.total
     val accuracy = if (total == 0) 0 else state.correctCount * 100 / total
     val seconds = ((state.lastRecord?.durationMs ?: 0L) / 1000).toInt()
+    // 拓展资源练习（易混词辨析 / 真题句子翻译）不进排行榜，
+    // 结算页的文案、按钮与退出去向都要与普通闯关区分开：
+    // 它们从「我的」页进来，退出时应该回「我的」，而不是回闯关选关页。
+    val isExtension = state.unit in EXTENSION_QUIZ_SCOPES
+    fun leave() {
+        vm.exitQuiz()
+        if (isExtension) onExit()
+    }
 
     Column(
         modifier = Modifier
@@ -1210,9 +1203,17 @@ private fun QuizResult(
         }
 
         Spacer(Modifier.height(14.dp))
-        AppCard(color = LocalAppColors.current.cardMint, padding = 16.dp) {
+        AppCard(
+            color = if (isExtension) LocalAppColors.current.cardSky
+            else LocalAppColors.current.cardMint,
+            padding = 16.dp
+        ) {
             Text(
-                text = "本次成绩已记入「历次成绩排行榜」，可以随时和自己的历史最好成绩比较。",
+                text = if (isExtension) {
+                    "本次是拓展资源练习，成绩不计入排行榜排名，可以反复练到全对。"
+                } else {
+                    "本次成绩已记入「历次成绩排行榜」，可以随时和自己的历史最好成绩比较。"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -1230,24 +1231,30 @@ private fun QuizResult(
         }
         Spacer(Modifier.height(10.dp))
         OutlinedButton(
-            onClick = { vm.exitQuiz(); onOpenLeaderboard() },
+            onClick = { if (isExtension) leave() else { vm.exitQuiz(); onOpenLeaderboard() } },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(50.dp),
             shape = RoundedCornerShape(18.dp)
         ) {
-            Text(stringResource(R.string.action_view_leaderboard))
+            Text(
+                stringResource(
+                    if (isExtension) R.string.action_back_practice
+                    else R.string.action_view_leaderboard
+                )
+            )
         }
         Spacer(Modifier.height(10.dp))
         Text(
             text = when {
+                isExtension -> "返回后可再次进入拓展练习"
                 state.letter != null -> "返回后可继续选择其他首字母"
                 state.unit == QUIZ_SCOPE_ALL -> "返回后可重新挑战本级全部词汇"
                 else -> "返回后可继续选择其他单元"
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.clickable { vm.exitQuiz() }
+            modifier = Modifier.clickable { leave() }
         )
         Spacer(Modifier.height(20.dp))
     }

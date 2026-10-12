@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -356,6 +357,47 @@ fun MenuRow(
             modifier = Modifier.size(16.dp),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * 专题练习入口卡片：标题 + 说明 + 右侧按钮的三段式结构。
+ *
+ * 原先这是闯关页的私有实现（易混词辨析 / 真题句子翻译两张卡）。
+ * 两个专题搬到「我的」页的拓展资源练习区后，闯关页不再需要它，
+ * 但「我的」页还要用同一套版式，因此提到公共组件里，
+ * 保证两处的行高、圆角、按钮尺寸完全一致。
+ *
+ * [actionLabel] 由调用方传入：闯关页用「开始挑战」，
+ * 拓展练习区用「开始练习」，避免在组件内部写死文案。
+ */
+@Composable
+fun TopicCard(
+    title: String,
+    desc: String,
+    container: Color,
+    actionLabel: String,
+    onClick: () -> Unit
+) {
+    AppCard(color = container, padding = 14.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = desc,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Button(onClick = onClick) { Text(actionLabel) }
+        }
     }
 }
 

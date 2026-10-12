@@ -52,6 +52,7 @@ import com.hdu.cetvocab.ui.components.IconFlame
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.StatTile
 import com.hdu.cetvocab.ui.components.Tag
+import com.hdu.cetvocab.ui.components.TopicCard
 import com.hdu.cetvocab.ui.components.WeekBarChart
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 import com.hdu.cetvocab.ui.theme.springPress
@@ -63,7 +64,9 @@ import kotlin.math.sin
 fun ProfileScreen(
     vm: AppViewModel,
     onOpenAchievements: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenConfusable: () -> Unit,
+    onOpenTranslation: () -> Unit
 ) {
     val state by vm.profile.collectAsState()
     val ov = state.overview
@@ -232,6 +235,44 @@ fun ProfileScreen(
                     }
                 }
             }
+        }
+
+        // ---------- 拓展资源练习 ----------
+        // 「易混词辨析」与「真题句子翻译」原先挂在闯关页。两者都是专项巩固性质，
+        // 且不参与排行榜排名，和「闯关」的定位并不一致，因此挪到成就卡下方，
+        // 归入「拓展资源练习」——成就与拓展练习放在一起，也符合「练成就」的动线。
+        item {
+            Column {
+                // 不传 accent：用主题默认主色。原先想用 cardSky，
+                // 但那是 #EAF1FA 的极淡蓝，当 4dp 色条压在暖色背景上几乎看不见。
+                SectionTitle(text = stringResource(R.string.profile_extension_title))
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.profile_extension_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        item {
+            TopicCard(
+                title = stringResource(R.string.quiz_topic_confusable),
+                desc = stringResource(R.string.quiz_topic_confusable_desc),
+                container = LocalAppColors.current.cardSky,
+                actionLabel = stringResource(R.string.action_start_practice),
+                onClick = onOpenConfusable
+            )
+        }
+
+        item {
+            TopicCard(
+                title = stringResource(R.string.quiz_topic_translation),
+                desc = stringResource(R.string.quiz_topic_translation_desc),
+                container = LocalAppColors.current.cardMint,
+                actionLabel = stringResource(R.string.action_start_practice),
+                onClick = onOpenTranslation
+            )
         }
 
         // ---------- 入口 ----------
