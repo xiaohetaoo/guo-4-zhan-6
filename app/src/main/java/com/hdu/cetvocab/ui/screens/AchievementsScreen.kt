@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -25,12 +26,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.data.Achievements
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.AppTopBar
+import com.hdu.cetvocab.ui.components.IconTrophy
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 
@@ -91,9 +92,9 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             }
                             Spacer(Modifier.padding(6.dp))
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "🏆",
-                                    fontSize = 30.sp
+                                IconTrophy(
+                                    modifier = Modifier.size(32.dp),
+                                    color = LocalAppColors.current.gold
                                 )
                                 Text(
                                     text = "金色 $goldenCount",

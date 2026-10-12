@@ -27,23 +27,35 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 
-/** 喇叭按钮：纯 Canvas 绘制，不依赖图标字体或图片资源 */
+/**
+ * 喇叭按钮：纯 Canvas 绘制，不依赖图标字体或图片资源。
+ *
+ * 按钮里的喇叭是自绘图形、没有内置语义，因此由外层可点区域统一给出
+ * 朗读文本（默认「朗读」），避免 TalkBack 只念出一个无名按钮。
+ */
 @Composable
 fun SpeakButton(
     text: String,
     onSpeak: (String) -> Unit,
     modifier: Modifier = Modifier,
     size: Dp = 44.dp,
-    filled: Boolean = true
+    filled: Boolean = true,
+    label: String? = null
 ) {
+    val speakLabel = label ?: stringResource(R.string.action_speak)
     val bg = if (filled) MaterialTheme.colorScheme.primary
     else MaterialTheme.colorScheme.primaryContainer
     val fg = if (filled) MaterialTheme.colorScheme.onPrimary
@@ -53,7 +65,8 @@ fun SpeakButton(
             .size(size)
             .clip(CircleShape)
             .background(bg)
-            .clickable { onSpeak(text) },
+            .clickable(role = Role.Button, onClick = { onSpeak(text) })
+            .semantics { contentDescription = speakLabel },
         contentAlignment = Alignment.Center
     ) {
         Canvas(Modifier.size(size * 0.46f)) {
@@ -201,19 +214,11 @@ fun MnemonicBlock(word: Word, modifier: Modifier = Modifier) {
             .padding(14.dp)
     ) {
         word.mnemonic.split("\n").filter { it.isNotBlank() }.forEach { line ->
-            Row(modifier = Modifier.padding(vertical = 2.dp)) {
-                Text(
-                    text = "·",
-                    color = LocalAppColors.current.gold,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(end = 6.dp)
-                )
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
+            BulletRow(
+                text = line,
+                modifier = Modifier.padding(vertical = 2.dp),
+                dotColor = LocalAppColors.current.gold
+            )
         }
     }
 }
@@ -254,17 +259,29 @@ fun SimilarBlock(word: Word, modifier: Modifier = Modifier) {
     }
 }
 
-/** 掌握等级小圆点 */
+/**
+ * 掌握等级小圆点。
+ *
+ * 圆点是纯色块、没有任何语义，TalkBack 默认完全读不出来；
+ * 这里把它折叠成一个可朗读的整体（例如「掌握等级 3/5」），
+ * 而不是让读屏器逐个念 5 个无名色块。
+ */
 @Composable
-fun LevelDots(level: Int, modifier: Modifier = Modifier) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        repeat(5) { i ->
+fun LevelDots(level: Int, modifier: Modifier = Modifier, describe: Boolean = true) {
+    val dots = 5
+    val lit = level.coerceIn(0, dots)
+    val description = stringResource(R.string.cd_level_dots, lit, dots)
+    Row(
+        modifier = if (describe) modifier.semantics { contentDescription = description } else modifier,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        repeat(dots) { i ->
             Box(
                 modifier = Modifier
                     .size(9.dp)
                     .clip(CircleShape)
                     .background(
-                        if (i < level) LocalAppColors.current.success else MaterialTheme.colorScheme.outlineVariant
+                        if (i < lit) LocalAppColors.current.success else MaterialTheme.colorScheme.outlineVariant
                     )
             )
         }
@@ -280,9 +297,9 @@ fun EmptyHint(text: String, modifier: Modifier = Modifier, hint: String = "") {
             .padding(vertical = 42.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = "🍃",
-            fontSize = 30.sp
+        IconLeaf(
+            modifier = Modifier.size(40.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         )
         Spacer(Modifier.height(10.dp))
         Text(

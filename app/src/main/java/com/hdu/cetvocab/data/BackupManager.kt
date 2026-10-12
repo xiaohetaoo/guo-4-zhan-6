@@ -8,8 +8,10 @@ import android.database.sqlite.SQLiteDatabase
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
@@ -27,8 +29,18 @@ class BackupManager(
     private val prefs: SharedPreferences =
         context.getSharedPreferences("vocab_meta", Context.MODE_PRIVATE)
 
-    private val fileStamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault())
-    private val timeText = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    // 用 DateTimeFormatter 而不是 SimpleDateFormat：前者不可变、线程安全，
+    // 可以安全地作为字段复用。SimpleDateFormat 非线程安全，多线程并发导出时
+    // 会输出错乱的时间甚至抛异常。
+    // 文件名精确到秒：原来只到分钟，同一分钟内连点两次「备份数据」会互相覆盖，
+    // 静默丢掉一份备份。
+    private val fileStamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+    private val timeText = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+    private fun stamp(): String = fileStamp.format(LocalDateTime.now())
+
+    /** 每个目录最多保留的历史文件数，超出的按时间从旧到新删除 */
+    private val keepPerDir = 20
 
     private fun exportDir(): File = File(baseDir(), "导出").apply { mkdirs() }
 
@@ -37,11 +49,21 @@ class BackupManager(
     /** 优先用应用外部私有目录；极端情况下（无外部存储）退回内部私有目录 */
     private fun baseDir(): File = context.getExternalFilesDir(null) ?: context.filesDir
 
+    /**
+     * 只保留最新的 [keepPerDir] 个文件，其余删除。
+     * 导出与备份都是「每次新建一个带时间戳的文件」，不清理会无限增长。
+     */
+    private fun prune(dir: File, suffix: String) {
+        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(suffix, ignoreCase = true) }
+            ?.sortedByDescending { it.lastModified() } ?: return
+        files.drop(keepPerDir).forEach { runCatching { it.delete() } }
+    }
+
     // ---------------- 导出 CSV ----------------
 
     /** 导出全部学习记录，一行一个单词状态 */
     fun exportStudyCsv(): File {
-        val file = File(exportDir(), "学习记录_${fileStamp.format(Date())}.csv")
+        val file = File(exportDir(), "学习记录_${stamp()}.csv")
         val sb = StringBuilder()
         sb.append("word,level,wrong_count,fav,last_study,next_review\n")
         userDb.readableDatabase.rawQuery(
@@ -59,12 +81,13 @@ class BackupManager(
             }
         }
         file.writeText(sb.toString())
+        prune(exportDir(), ".csv")
         return file
     }
 
     /** 导出收藏的单词本，按字母序 */
     fun exportFavCsv(): File {
-        val file = File(exportDir(), "单词本_${fileStamp.format(Date())}.csv")
+        val file = File(exportDir(), "单词本_${stamp()}.csv")
         val favIds = ArrayList<Int>()
         userDb.readableDatabase.rawQuery(
             "SELECT word_id FROM word_state WHERE fav=1", null
@@ -80,6 +103,7 @@ class BackupManager(
                 .append(w.unit).append('\n')
         }
         file.writeText(sb.toString())
+        prune(exportDir(), ".csv")
         return file
     }
 
@@ -87,7 +111,7 @@ class BackupManager(
 
     /** 备份全部用户数据为单个 JSON 文件 */
     fun backupJson(): File {
-        val file = File(backupDir(), "cetvocab_backup_${fileStamp.format(Date())}.json")
+        val file = File(backupDir(), "cetvocab_backup_${stamp()}.json")
         val root = JSONObject()
         root.put("app", "过四斩六")
         root.put("db_version", UserDb.DB_VERSION)
@@ -173,6 +197,7 @@ class BackupManager(
             }
         )
         file.writeText(root.toString(2))
+        prune(backupDir(), ".json")
         return file
     }
 
@@ -184,12 +209,47 @@ class BackupManager(
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
+    /** 恢复结果摘要：让界面能如实告诉用户「恢复了多少、跳过了多少失效记录」 */
+    data class RestoreReport(
+        val words: Int,
+        val logs: Int,
+        val quizzes: Int,
+        /** 因 word_id 在当前词库中不存在而被丢弃的记录数 */
+        val skipped: Int
+    )
+
     /**
      * 用指定备份覆盖当前全部学习数据。
-     * 会先清空相关数据表，再写回备份内容，最后恢复 SharedPreferences。
+     *
+     * 执行顺序刻意设计为「**先全部校验、再动数据**」：
+     * 解析与校验阶段一旦失败就直接抛异常，此时一行数据都还没删，用户现有进度完好无损。
+     * 历史实现是先 `readText()` 再进事务删表，虽然事务能回滚，
+     * 但缺少版本与有效性校验，会把一批指向不存在单词的记录写进来。
      */
-    fun restore(file: File) {
+    fun restore(file: File): RestoreReport {
         val root = JSONObject(file.readText())
+
+        // ---------- 1. 校验：不通过则直接抛出，此时尚未触碰任何现有数据 ----------
+        val backupVersion = root.optInt("db_version", 0)
+        require(backupVersion <= UserDb.DB_VERSION) {
+            "备份来自更新的应用版本（备份 v$backupVersion，当前 v${UserDb.DB_VERSION}），请先升级应用再恢复"
+        }
+
+        // 词库随版本更新，旧备份里的 word_id 可能已不存在于当前词库。
+        // 这类「孤儿记录」永远不会出现在任何列表里，却会占用 totalLearned 等统计口径，
+        // 所以这里先取当前词库的全部合法 id，恢复时把无效条目剔除。
+        val validIds = (
+            wordDb.idsOfStage(WordDb.STAGE_CET4) + wordDb.idsOfStage(WordDb.STAGE_CET6)
+            ).toHashSet()
+
+        val allStates = root.optJSONArray("word_state").objects()
+        val states = allStates.filter { it.optInt("word_id", -1) in validIds }
+        val allLogs = root.optJSONArray("study_log").objects()
+        val logs = allLogs.filter { it.optInt("word_id", -1) in validIds }
+        val quizzes = root.optJSONArray("quiz_record").objects()
+        val skipped = (allStates.size - states.size) + (allLogs.size - logs.size)
+
+        // ---------- 2. 写回：整段包在一个事务里，中途失败会自动回滚 ----------
         val db = userDb.writableDatabase
         db.beginTransaction()
         try {
@@ -199,16 +259,16 @@ class BackupManager(
             db.execSQL("DELETE FROM achievement")
             db.execSQL("DELETE FROM app_meta")
 
-            each(root.optJSONArray("word_state")) { o ->
+            states.forEach { o ->
                 db.insertWithOnConflict(
                     "word_state", null,
                     ContentValues().apply {
-                        put("word_id", o.getInt("word_id"))
-                        put("level", o.getInt("level"))
-                        put("wrong_count", o.getInt("wrong_count"))
-                        put("fav", o.getInt("fav"))
-                        put("last_ts", o.getLong("last_ts"))
-                        put("next_review_ts", o.getLong("next_review_ts"))
+                        put("word_id", o.optInt("word_id"))
+                        put("level", o.optInt("level"))
+                        put("wrong_count", o.optInt("wrong_count"))
+                        put("fav", o.optInt("fav"))
+                        put("last_ts", o.optLong("last_ts"))
+                        put("next_review_ts", o.optLong("next_review_ts"))
                         put("ease", o.optDouble("ease", 2.5))
                         put("reps", o.optInt("reps", 0))
                         put("interval_days", o.optInt("interval_days", 0))
@@ -216,53 +276,53 @@ class BackupManager(
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
             }
-            each(root.optJSONArray("study_log")) { o ->
+            logs.forEach { o ->
                 db.insertWithOnConflict(
                     "study_log", null,
                     ContentValues().apply {
-                        put("id", o.getLong("id"))
-                        put("word_id", o.getInt("word_id"))
-                        put("correct", o.getInt("correct"))
-                        put("day", o.getString("day"))
-                        put("ts", o.getLong("ts"))
+                        // 刻意不写 id：让 SQLite 重新分配自增主键。
+                        // 备份里的 id 可能与当前库的自增序列冲突，回填会导致后续插入撞主键。
+                        put("word_id", o.optInt("word_id"))
+                        put("correct", o.optInt("correct"))
+                        put("day", o.optString("day"))
+                        put("ts", o.optLong("ts"))
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
             }
-            each(root.optJSONArray("quiz_record")) { o ->
+            quizzes.forEach { o ->
                 db.insertWithOnConflict(
                     "quiz_record", null,
                     ContentValues().apply {
-                        put("id", o.getLong("id"))
-                        put("stage", o.getInt("stage"))
-                        put("unit", o.getInt("unit"))
-                        put("mode", o.getString("mode"))
-                        put("score", o.getInt("score"))
-                        put("total", o.getInt("total"))
-                        put("correct", o.getInt("correct"))
-                        put("max_combo", o.getInt("max_combo"))
-                        put("duration_ms", o.getLong("duration_ms"))
-                        put("ts", o.getLong("ts"))
+                        put("stage", o.optInt("stage"))
+                        put("unit", o.optInt("unit"))
+                        put("mode", o.optString("mode"))
+                        put("score", o.optInt("score"))
+                        put("total", o.optInt("total"))
+                        put("correct", o.optInt("correct"))
+                        put("max_combo", o.optInt("max_combo"))
+                        put("duration_ms", o.optLong("duration_ms"))
+                        put("ts", o.optLong("ts"))
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
             }
-            each(root.optJSONArray("achievement")) { o ->
+            root.optJSONArray("achievement").objects().forEach { o ->
                 db.insertWithOnConflict(
                     "achievement", null,
                     ContentValues().apply {
-                        put("code", o.getString("code"))
-                        put("unlocked_ts", o.getLong("unlocked_ts"))
+                        put("code", o.optString("code"))
+                        put("unlocked_ts", o.optLong("unlocked_ts"))
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
             }
-            each(root.optJSONArray("app_meta")) { o ->
+            root.optJSONArray("app_meta").objects().forEach { o ->
                 db.insertWithOnConflict(
                     "app_meta", null,
                     ContentValues().apply {
-                        put("k", o.getString("k"))
-                        put("v", o.getString("v"))
+                        put("k", o.optString("k"))
+                        put("v", o.optString("v"))
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
@@ -272,6 +332,15 @@ class BackupManager(
             db.endTransaction()
         }
 
+        // ---------- 3. 偏好 ----------
+        // 偏好与数据库分属两个存储，没有跨存储事务，任何顺序都无法做到「原子」。
+        // 这里刻意把偏好放在数据库之后，理由是两个方向的失败代价不对称：
+        //   · 数据库已提交、偏好没写成功 → 用户只是保留了自己当前的设置（级别/目标/语速），
+        //     数据是对的，行为无害；
+        //   · 反过来先写偏好、数据库失败 → 设置被换成备份里的旧值，但数据还是原来的，
+        //     用户会看到「设置变了、进度没变」，更容易误判为恢复失败。
+        // 另外用 commit() 而不是 apply()：apply 是异步落盘，进程被杀时写入可能丢失，
+        // 而这里需要「恢复完成」这个语义是确定的。
         root.optJSONObject("prefs")?.let { p ->
             prefs.edit().apply {
                 if (p.has(KEY_STAGE)) putInt(KEY_STAGE, p.optInt(KEY_STAGE, WordDb.STAGE_CET4))
@@ -279,8 +348,10 @@ class BackupManager(
                 if (p.has(KEY_AUTOSPEAK)) putBoolean(KEY_AUTOSPEAK, p.optBoolean(KEY_AUTOSPEAK, true))
                 if (p.has(KEY_RATE)) putFloat(KEY_RATE, p.optDouble(KEY_RATE, 0.92).toFloat())
                 if (p.has(KEY_UNIT)) putInt(KEY_UNIT, p.optInt(KEY_UNIT, 0))
-            }.apply()
+            }.commit()
         }
+
+        return RestoreReport(states.size, logs.size, quizzes.size, skipped)
     }
 
     // ---------------- 内部工具 ----------------
@@ -293,13 +364,18 @@ class BackupManager(
         return arr
     }
 
-    private inline fun each(arr: JSONArray?, action: (JSONObject) -> Unit) {
-        if (arr == null) return
-        for (i in 0 until arr.length()) action(arr.getJSONObject(i))
+    /** JSONArray -> List<JSONObject>；null 或元素类型不符时返回空列表 */
+    private fun JSONArray?.objects(): List<JSONObject> {
+        if (this == null) return emptyList()
+        val list = ArrayList<JSONObject>(length())
+        for (i in 0 until length()) optJSONObject(i)?.let { list.add(it) }
+        return list
     }
 
     private fun formatTs(ts: Long): String =
-        if (ts <= 0L) "" else timeText.format(Date(ts))
+        if (ts <= 0L) "" else timeText.format(
+            LocalDateTime.ofInstant(Instant.ofEpochMilli(ts), ZoneId.systemDefault())
+        )
 
     /** CSV 单元格转义：含逗号/引号/换行时用双引号包裹，内部引号翻倍 */
     private fun csvCell(value: String): String =

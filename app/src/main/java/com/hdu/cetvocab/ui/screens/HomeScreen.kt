@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -32,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -40,6 +42,7 @@ import com.hdu.cetvocab.data.QuizRecord
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AppCard
+import com.hdu.cetvocab.ui.components.IconSparkle
 import com.hdu.cetvocab.ui.components.ProgressRing
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.StatTile
@@ -132,12 +135,21 @@ fun HomeScreen(
                     }
                     Spacer(Modifier.width(18.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (progress >= 1f) "今日目标已达成 🎉" else "今日学习目标",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (progress >= 1f) "今日目标已达成" else "今日学习目标",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (progress >= 1f) {
+                                Spacer(Modifier.width(4.dp))
+                                IconSparkle(
+                                    modifier = Modifier.size(16.dp),
+                                    color = LocalAppColors.current.gold
+                                )
+                            }
+                        }
                         Spacer(Modifier.height(6.dp))
                         Text(
                             text = "待复习 ${state.dueCount} 词 · 队列 ${state.queueCount} 词",
@@ -245,7 +257,11 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
                         if (selected) MaterialTheme.colorScheme.primary
                         else androidx.compose.ui.graphics.Color.Transparent
                     )
-                    .clickable { if (!selected) onSelect(s) }
+                    .selectable(
+                        selected = selected,
+                        role = Role.Tab,
+                        onClick = { if (!selected) onSelect(s) }
+                    )
                     .padding(horizontal = 14.dp, vertical = 7.dp)
             ) {
                 Text(
@@ -261,12 +277,13 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
 }
 
 private fun greeting(): String {
-    val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    // 用 java.time.LocalTime 替代 Calendar：不可变、线程安全，语义也更直接
+    val hour = java.time.LocalTime.now().hour
     return when {
-        h in 5..10 -> "早上好，今天也要加油"
-        h in 11..13 -> "中午好，利用碎片时间记几个词"
-        h in 14..17 -> "下午好，来一组闯关吧"
-        h in 18..22 -> "晚上好，完成今天的目标吧"
+        hour in 5..10 -> "早上好，今天也要加油"
+        hour in 11..13 -> "中午好，利用碎片时间记几个词"
+        hour in 14..17 -> "下午好，来一组闯关吧"
+        hour in 18..22 -> "晚上好，完成今天的目标吧"
         else -> "夜深了，注意休息"
     }
 }

@@ -30,10 +30,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.data.AchievementDef
@@ -221,10 +225,12 @@ fun glyphChar(glyph: String): String = when (glyph) {
     "shield" -> "盾"
     "target" -> "靶"
     "star" -> "星"
-    "check" -> "✓"
+    // 徽章字形统一用汉字：原先这里是「✓」和「★」两个排版符号，
+    // 与周围汉字字形风格不一致（笔画细、体量小），改为「达 / 星」。
+    "check" -> "达"
     "moon" -> "月"
     "sun" -> "日"
-    else -> "★"
+    else -> "星"
 }
 
 @Composable
@@ -247,7 +253,10 @@ fun AchievementBadge(
         modifier = modifier
             .clip(RoundedCornerShape(18.dp))
             .background(if (unlocked) tint.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant)
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+            .then(
+                if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick)
+                else Modifier
+            )
             .padding(horizontal = 10.dp, vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -298,8 +307,46 @@ fun Tag(
     )
 }
 
-/** 暖色卡片底色列表（跟随深浅色主题） */
-val warmCards: List<Color>
-    @Composable get() = with(LocalAppColors.current) {
-        listOf(cardPeach, cardAmber, cardRose, cardMint, cardSky)
+/**
+ * 圆点项目符号行。
+ *
+ * 原先用字符 `·` 当项目符号，但那个字符用的是默认正文样式（15sp / 行高 23sp），
+ * 而同一行的正文是 bodySmall（12sp / 行高 18sp）——两套行高不同、基线不一致，
+ * 实测圆点会明显沉到基线附近（偏低约 4dp）。
+ *
+ * 这里改成自绘小圆点，并按正文行高把它压到**首行文字的光学中心**：
+ * 行高经 `toDp()` 换算，会跟随系统字体缩放一起变大，不会因用户调大字号而错位。
+ *
+ * 注意：`TextStyle.lineHeight` 可能是 `TextUnit.Unspecified`（例如调用方传入了
+ * 只设了字号、没设行高的自定义样式），此时 `toDp()` 会得到 NaN，圆点会被
+ * 摆到错误位置。这里做两级兜底：行高 → 字号 × 1.4 → 固定 18dp。
+ */
+@Composable
+fun BulletRow(
+    text: String,
+    modifier: Modifier = Modifier,
+    dotColor: Color = MaterialTheme.colorScheme.primary,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    style: TextStyle = MaterialTheme.typography.bodySmall
+) {
+    val dotSize = 5.dp
+    val lineDp = with(LocalDensity.current) {
+        val lineHeight = style.lineHeight
+        val fontSize = style.fontSize
+        when {
+            lineHeight != TextUnit.Unspecified && lineHeight.value > 0f -> lineHeight.toDp()
+            fontSize != TextUnit.Unspecified && fontSize.value > 0f -> (fontSize * 1.4f).toDp()
+            else -> 18.dp
+        }
     }
+    val dotTop = ((lineDp - dotSize) / 2).coerceAtLeast(0.dp)
+    Row(modifier = modifier, verticalAlignment = Alignment.Top) {
+        IconDot(
+            modifier = Modifier
+                .padding(top = dotTop, end = 8.dp)
+                .size(dotSize),
+            color = dotColor
+        )
+        Text(text = text, style = style, color = textColor)
+    }
+}

@@ -1,5 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  界面文案统一放在这里。
+
+  历史情况：strings.xml 里只有 app_name 一条，其余 31 处按钮 / 对话框文案都直接写在
+  Composable 的 Text("…") 里。单语言（中文）下能跑，但无法本地化，
+  也让「同一句文案在多处出现」变得难以统一维护。
+  这里把 UI 层的 Text 字面量全部资源化；数据层（成就名、段位名等）属于领域数据，
+  不是界面文案，仍保留在 Kotlin 常量中。
+-->
 <resources>
     <string name="app_name">过四斩六</string>
-    <string name="app_slogan">离线也能背好四六级词汇</string>
+
+    <!-- 通用动作 -->
+    <string name="action_back">返回</string>
+    <string name="action_close">关闭</string>
+    <string name="action_speak">朗读</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_ok">确定</string>
+    <string name="action_done">完成</string>
+    <string name="action_quit">退出</string>
+    <string name="action_copy_path">复制路径</string>
+
+    <!-- 通用状态 -->
+    <string name="state_loading">加载中…</string>
+    <string name="title_settings">设置</string>
+    <string name="title_operation_failed">操作失败</string>
+
+    <!-- 词库 -->
+    <string name="action_browse_all">浏览全部</string>
+    <string name="hint_search">搜索单词或中文释义</string>
+
+    <!-- 学习 -->
+    <string name="study_empty_queue">这个队列没有单词</string>
+    <string name="study_reveal">查看释义与例句</string>
+    <string name="study_unknown">不认识</string>
+    <string name="study_known">认识了</string>
+
+    <!-- 闯关 -->
+    <string name="quiz_quit_title">退出本次闯关？</string>
+    <string name="quiz_quit_message">本局进度与成绩不会保存。</string>
+    <string name="action_continue_quiz">继续答题</string>
+    <string name="action_start_challenge">开始挑战</string>
+    <string name="quiz_lexicon_not_ready">词库尚未就绪</string>
+    <string name="quiz_topic_confusable">易混词辨析</string>
+    <string name="quiz_topic_confusable_desc">给中文释义，从四个形近词中挑出正确单词 · 10 题</string>
+    <string name="quiz_topic_translation">真题句子翻译</string>
+    <string name="quiz_topic_translation_desc">中文句选出全部正确译法，可多选 · 10 题</string>
+    <string name="hint_input_word">输入英文单词</string>
+    <string name="action_play_again">再来一局</string>
+    <string name="action_view_leaderboard">查看排行榜</string>
+
+    <!-- 设置 / 数据管理 -->
+    <string name="reset_confirm_title">确认清空全部数据？</string>
+    <string name="reset_confirm_message">学习进度、闯关成绩与成就记录都会被删除，且无法恢复。</string>
+    <string name="action_reset_confirm">确认清空</string>
+    <string name="restore_pick_title">选择要恢复的备份</string>
+    <string name="restore_confirm_title">确认恢复数据？</string>
+    <string name="action_restore_confirm">确认恢复</string>
+
+    <!-- 无障碍描述：自绘图标本身没有语义，需要由承载它的容器提供朗读文本 -->
+    <string name="cd_fav_add">加入生词本</string>
+    <string name="cd_fav_remove">从生词本移除</string>
+    <!-- 掌握等级圆点的无障碍描述，%1$d 为已点亮数量，%2$d 为总数 -->
+    <string name="cd_level_dots">掌握等级 %1$d/%2$d</string>
 </resources>

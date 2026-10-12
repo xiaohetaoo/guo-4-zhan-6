@@ -21,7 +21,14 @@ enum class Tier(val label: String, val minWords: Int) {
         next?.let { (it.minWords - learnedWords).coerceAtLeast(0) } ?: 0
 
     companion object {
-        /** 按已学词数取段位 */
-        fun of(learnedWords: Int): Tier = values().last { learnedWords >= it.minWords }
+        /**
+         * 按已学词数取段位。
+         *
+         * 用 `lastOrNull` 而不是 `last`：`last { }` 在没有任何元素满足条件时会抛
+         * `NoSuchElementException`。虽然入参由词数统计得出、正常不会为负，
+         * 但这里返回 0 而不是崩溃更稳妥。
+         */
+        fun of(learnedWords: Int): Tier =
+            values().lastOrNull { learnedWords >= it.minWords } ?: BRONZE
     }
 }

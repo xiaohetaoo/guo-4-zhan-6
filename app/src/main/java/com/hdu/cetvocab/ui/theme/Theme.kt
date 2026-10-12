@@ -1,6 +1,8 @@
 package com.hdu.cetvocab.ui.theme
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -80,8 +82,12 @@ fun CetVocabTheme(
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
-            val window = (view.context as Activity).window
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            // 不要把 LocalView.current.context 直接强转成 Activity：
+            // 在 ComposeView 嵌入别的宿主、或使用了 ContextWrapper 的场景下，
+            // 这个 context 未必就是 Activity，强转会抛 ClassCastException 而崩溃。
+            // 这里沿 ContextWrapper 链向上找，找不到就安静跳过状态栏设置。
+            val activity = view.context.findActivity() ?: return@SideEffect
+            WindowCompat.getInsetsController(activity.window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }
 
@@ -93,4 +99,14 @@ fun CetVocabTheme(
             content = content
         )
     }
+}
+
+/** 沿 ContextWrapper 链向上查找宿主 Activity；找不到返回 null（不抛异常） */
+private fun Context.findActivity(): Activity? {
+    var context: Context? = this
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    return context as? Activity
 }

@@ -30,7 +30,9 @@ object Achievements {
         AchievementDef(LEARN_500, "词海行者", "累计学习 500 个单词", "mountain", 3),
         AchievementDef(STREAK_3, "小有坚持", "连续打卡 3 天", "fire", 1),
         AchievementDef(STREAK_7, "一周不断", "连续打卡 7 天", "fire", 2),
-        AchievementDef(STREAK_10, "已连续打卡 10 天", "连续打卡 10 天", "fire", 3),
+        // 标题一律用短名：成就墙是 3 列网格、标题 maxLines=1，
+        // 写成完整句子（原为「已连续打卡 10 天」）会被省略号截断。
+        AchievementDef(STREAK_10, "十日不辍", "连续打卡 10 天", "fire", 3),
         AchievementDef(STREAK_30, "月度铁人", "连续打卡 30 天", "fire", 3),
         AchievementDef(QUIZ_FIRST, "初次闯关", "完成第一次单词闯关", "flag", 1),
         AchievementDef(QUIZ_PERFECT, "满分通关", "某次闯关全部答对", "medal", 2),

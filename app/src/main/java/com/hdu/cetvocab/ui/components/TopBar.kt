@@ -18,9 +18,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.hdu.cetvocab.R
 
 /** 二级页面统一顶栏（左返回 + 标题 + 右侧自定义） */
 @Composable
@@ -31,6 +35,7 @@ fun AppTopBar(
     subtitle: String = "",
     trailing: @Composable (() -> Unit)? = null
 ) {
+    val backLabel = stringResource(R.string.action_back)
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -42,14 +47,15 @@ fun AppTopBar(
                 .size(38.dp)
                 .clip(RoundedCornerShape(13.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable { onBack() },
+                .clickable(role = Role.Button, onClick = onBack)
+                // 返回图标是 Canvas 自绘、没有内置语义，必须显式给出朗读文本，
+                // 否则 TalkBack 只会念出一个无名的「按钮」。
+                .semantics { contentDescription = backLabel },
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "‹",
-                fontSize = 24.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Bold
+            IconBack(
+                modifier = Modifier.size(18.dp),
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
         Spacer(Modifier.width(12.dp))

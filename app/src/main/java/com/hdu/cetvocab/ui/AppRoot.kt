@@ -5,8 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -61,7 +61,7 @@ private data class Tab(val route: String, val label: String, val icon: ImageVect
 
 private val TABS = listOf(
     Tab(Routes.HOME, "首页", Icons.Filled.Home),
-    Tab(Routes.LEARN, "词库", Icons.Filled.List),
+    Tab(Routes.LEARN, "词库", Icons.AutoMirrored.Filled.List),
     Tab(Routes.QUIZ, "闯关", Icons.Filled.PlayArrow),
     Tab(Routes.PROFILE, "我的", Icons.Filled.Person)
 )
@@ -69,8 +69,12 @@ private val TABS = listOf(
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
     val context = LocalContext.current
-    // 系统 TTS：完全离线，不产生网络请求
-    val speech = remember { Speech(context) { vm.speechRate } }
+    // 系统 TTS：完全离线，不产生网络请求。
+    // 「语速」与「自动朗读」两个开关以回调形式注入，Speech 内部每次发音都取最新值，
+    // 因此用户改设置后无需重建实例即可生效。
+    val speech = remember {
+        Speech(context, { vm.speechRate }, { vm.autoSpeak })
+    }
     DisposableEffect(Unit) {
         onDispose { speech.shutdown() }
     }
@@ -133,7 +137,7 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            AppNavHost(nav, vm, speech::speak)
+            AppNavHost(nav, vm, speech::speak, speech::speakAuto)
         }
     }
 }
@@ -142,7 +146,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 private fun AppNavHost(
     nav: NavHostController,
     vm: AppViewModel,
-    speak: (String) -> Unit
+    speak: (String) -> Unit,
+    speakAuto: (String) -> Unit
 ) {
     NavHost(navController = nav, startDestination = Routes.HOME) {
 
@@ -179,7 +184,8 @@ private fun AppNavHost(
             QuizScreen(
                 vm = vm,
                 onExit = { nav.navigate(Routes.LEADERBOARD) },
-                onSpeak = speak
+                onSpeak = speak,
+                onSpeakAuto = speakAuto
             )
         }
 
@@ -196,6 +202,7 @@ private fun AppNavHost(
             StudyScreen(
                 vm = vm,
                 speak = speak,
+                speakAuto = speakAuto,
                 onFinish = {
                     // 结束本次学习：清空学习态并刷新首页 / 词库 / 我的，
                     // 同时弹出本次新解锁的成就提示

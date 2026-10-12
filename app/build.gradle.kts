@@ -1,7 +1,28 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+/*
+ * 签名凭据读取。
+ *
+ * 历史问题：storePassword / keyPassword 曾以明文写死在本文件里，而本文件是被版本库跟踪的，
+ * 导致发布签名口令随公开仓库一起泄露（详见 _audit/代码审计报告.md 的 P0-1）。
+ *
+ * 现在改为按「环境变量 → local.properties」的顺序读取，脚本里不再出现任何口令字面量。
+ * local.properties 已被 .gitignore 排除，不会进入版本库；CI 环境用环境变量注入。
+ * 若两者都取不到，签名口令为空会让 release 构建直接失败——这是刻意的：宁可构建失败，
+ * 也不要退回硬编码。
+ */
+val signingProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun signingValue(envName: String, propName: String): String =
+    System.getenv(envName) ?: signingProps.getProperty(propName) ?: ""
 
 android {
     namespace = "com.hdu.cetvocab"
@@ -11,17 +32,18 @@ android {
         applicationId = "com.hdu.cetvocab"
         minSdk = 26
         targetSdk = 34
-        versionCode = 15
-        versionName = "1.1.4"
+        versionCode = 21
+        versionName = "1.2.0"
         vectorDrawables { useSupportLibrary = true }
     }
 
     signingConfigs {
         create("release") {
             storeFile = file("cetvocab-release.jks")
-            storePassword = "cetvocab2026"
-            keyAlias = "cetvocab"
-            keyPassword = "cetvocab2026"
+            // 口令一律从环境变量 / local.properties 读取，脚本内不留明文
+            storePassword = signingValue("CETVOCAB_STORE_PASSWORD", "cetvocab.storePassword")
+            keyAlias = signingValue("CETVOCAB_KEY_ALIAS", "cetvocab.keyAlias")
+            keyPassword = signingValue("CETVOCAB_KEY_PASSWORD", "cetvocab.keyPassword")
         }
     }
 
@@ -63,8 +85,12 @@ android {
     }
 
     lint {
+        // 保留 lint 报告，但不用它阻断出包。
+        // 历史设置把 checkReleaseBuilds 也关了，等于 release 构建完全不跑 lint ——
+        // 报告里的「多余权限」「主题缺 night 限定符」「废弃 API」等本来都是 lint 的默认检查项，
+        // 关掉之后就再也没人提示过。现在恢复检查，只把「失败即中断」关掉。
         abortOnError = false
-        checkReleaseBuilds = false
+        checkReleaseBuilds = true
     }
 }
 

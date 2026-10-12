@@ -29,16 +29,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.CetVocabApp
+import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.AppTopBar
 import com.hdu.cetvocab.ui.components.ExampleBlock
+import com.hdu.cetvocab.ui.components.IconHeart
 import com.hdu.cetvocab.ui.components.LevelDots
 import com.hdu.cetvocab.ui.components.MnemonicBlock
 import com.hdu.cetvocab.ui.components.SectionTitle
@@ -80,23 +86,29 @@ fun WordDetailScreen(
             subtitle = word?.let { "${WordDb.stageLabel(it.stage)} · 第 ${it.unit} 单元 · 第 ${it.rank} 词" } ?: "",
             onBack = onBack,
             trailing = {
+                // 心形是自绘图标、没有内置语义，必须由外层容器给出朗读文本
+                val favLabel = stringResource(
+                    if (fav) R.string.cd_fav_remove else R.string.cd_fav_add
+                )
                 Box(
                     modifier = Modifier
                         .size(38.dp)
                         .clip(RoundedCornerShape(13.dp))
                         .background(if (fav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable {
+                        .clickable(role = Role.Button) {
                             word?.let {
                                 fav = !fav
                                 vm.toggleFav(it)
                             }
-                        },
+                        }
+                        .semantics { contentDescription = favLabel },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = if (fav) "♥" else "♡",
-                        fontSize = 18.sp,
-                        color = if (fav) LocalAppColors.current.warning else MaterialTheme.colorScheme.onSurfaceVariant
+                    IconHeart(
+                        modifier = Modifier.size(19.dp),
+                        filled = fav,
+                        color = if (fav) LocalAppColors.current.warning
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -105,7 +117,7 @@ fun WordDetailScreen(
         val w = word
         if (w == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.state_loading), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             return
         }

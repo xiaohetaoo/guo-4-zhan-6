@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -38,17 +39,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.UnitItem
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.EmptyHint
+import com.hdu.cetvocab.ui.components.IconBack
+import com.hdu.cetvocab.ui.components.IconChevronRight
 import com.hdu.cetvocab.ui.components.LevelDots
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.Tag
@@ -106,7 +112,7 @@ fun LearnScreen(
                         showingAllWords = true
                         vm.previewAllWords()
                     }) {
-                        Text("浏览全部")
+                        Text(stringResource(R.string.action_browse_all))
                     }
                 }
             }
@@ -115,7 +121,7 @@ fun LearnScreen(
                 value = state.query,
                 onValueChange = { vm.search(it) },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("搜索单词或中文释义") },
+                placeholder = { Text(stringResource(R.string.hint_search)) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -126,7 +132,7 @@ fun LearnScreen(
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier
-                                .clickable { vm.search("") }
+                                .clickable(role = Role.Button) { vm.search("") }
                                 .padding(end = 12.dp)
                         )
                     }
@@ -150,7 +156,7 @@ fun LearnScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(state.searchResult, key = { it.id }) { w ->
-                        WordRow(w = w, onClick = { onOpenWord(w.id) })
+                        WordRow(w = w, level = state.levels[w.id] ?: 0, onClick = { onOpenWord(w.id) })
                     }
                 }
             }
@@ -164,12 +170,24 @@ fun LearnScreen(
                     .padding(horizontal = 16.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "‹ 返回词库",
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.clickable { showingAllWords = false }.padding(vertical = 6.dp)
-                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(role = Role.Button) { showingAllWords = false }
+                        .padding(horizontal = 2.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconBack(
+                        modifier = Modifier.size(15.dp),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        text = "返回词库",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 Text(
                     text = "全部 ${state.allWords.size} 个单词",
@@ -229,7 +247,11 @@ fun LearnScreen(
                                 )
                             }
                             items(words, key = { "all-${it.id}" }) { word ->
-                                WordRow(w = word, onClick = { onOpenWord(word.id) })
+                                WordRow(
+                                    w = word,
+                                    level = state.levels[word.id] ?: 0,
+                                    onClick = { onOpenWord(word.id) }
+                                )
                             }
                         }
                     }
@@ -268,7 +290,11 @@ fun LearnScreen(
                                 if (selected) MaterialTheme.colorScheme.primary
                                 else androidx.compose.ui.graphics.Color.Transparent
                             )
-                            .clickable { tab = i }
+                            .selectable(
+                                selected = selected,
+                                role = Role.Tab,
+                                onClick = { tab = i }
+                            )
                             .padding(vertical = 9.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -289,14 +315,16 @@ fun LearnScreen(
             0 -> UnitList(state.units, onOpenUnit)
             1 -> WordListOrEmpty(
                 words = state.favWords,
+                levels = state.levels,
                 empty = "还没有收藏的生词",
-                hint = "学习时点击 ♥ 即可加入生词本",
+                hint = "学习时点击右上角的心形按钮即可加入生词本",
                 actionLabel = if (state.favWords.isEmpty()) null else "开始复习生词",
                 onAction = onStartFav,
                 onOpenWord = onOpenWord
             )
             else -> WordListOrEmpty(
                 words = state.wrongWords,
+                levels = state.levels,
                 empty = "暂时没有错词记录",
                 hint = "答错的单词会自动进入这里",
                 actionLabel = if (state.wrongWords.isEmpty()) null else "开始强化错词",
@@ -404,7 +432,7 @@ private fun PillButton(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
             .background(container)
-            .clickable { onClick() }
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
         Text(
@@ -419,6 +447,7 @@ private fun PillButton(
 @Composable
 private fun WordListOrEmpty(
     words: List<Word>,
+    levels: Map<Int, Int>,
     empty: String,
     hint: String,
     actionLabel: String?,
@@ -453,19 +482,19 @@ private fun WordListOrEmpty(
             }
         }
         items(words, key = { it.id }) { w ->
-            WordRow(w = w, onClick = { onOpenWord(w.id) })
+            WordRow(w = w, level = levels[w.id] ?: 0, onClick = { onOpenWord(w.id) })
         }
     }
 }
 
 @Composable
-private fun WordRow(w: Word, onClick: () -> Unit) {
+private fun WordRow(w: Word, level: Int, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .clickable { onClick() }
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -498,11 +527,12 @@ private fun WordRow(w: Word, onClick: () -> Unit) {
             )
         }
         Spacer(Modifier.width(8.dp))
-        LevelDots(level = 0)
+        // 掌握度圆点此前硬编码 0，列表里永远显示「未学」，
+        // 用户无法一眼分辨生词熟词。等级由 LearnUiState.levels 下发。
+        LevelDots(level = level)
         Spacer(Modifier.width(6.dp))
-        Text(
-            text = "›",
-            fontSize = 18.sp,
+        IconChevronRight(
+            modifier = Modifier.size(15.dp),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
@@ -539,7 +569,10 @@ private fun LetterIndexBar(
             ) {
                 Text(
                     text = letter,
+                    // 必须显式收紧行高：只写 fontSize 会继承 Material3 的 24sp 行高，
+                    // 字形会被顶到 16dp 色块的下半部，导致高亮块看起来没对齐。
                     fontSize = 10.sp,
+                    lineHeight = 12.sp,
                     fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                     color = if (active) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.primary

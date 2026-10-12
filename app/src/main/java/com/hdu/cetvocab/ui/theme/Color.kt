@@ -34,11 +34,8 @@ val WarmOnErrorContainer = Color(0xFF410100)
 
 // ===== 语义色 =====
 val ColorSuccess = Color(0xFF5B9A54)
-val ColorSuccessSoft = Color(0xFFE6F3E3)
 val ColorWarning = Color(0xFFE9A03B)
-val ColorWarningSoft = Color(0xFFFFF2DC)
 val ColorDanger = Color(0xFFBF4133)
-val ColorDangerSoft = Color(0xFFFDE7E4)
 val ColorStar = Color(0xFFF2B33D)
 val ColorFire = Color(0xFFE4572E)
 val ColorGold = Color(0xFFD9A441)
@@ -85,11 +82,8 @@ val DarkOnErrorContainer = Color(0xFFFFDAD4)
 
 // 语义色（深色版）
 val DarkSuccess = Color(0xFF7FBF78)
-val DarkSuccessSoft = Color(0xFF2A3A28)
 val DarkWarning = Color(0xFFF0B25C)
-val DarkWarningSoft = Color(0xFF3A2F1C)
 val DarkDanger = Color(0xFFE87A6C)
-val DarkDangerSoft = Color(0xFF3A211E)
 val DarkStar = Color(0xFFF2B33D)
 val DarkFire = Color(0xFFF0704A)
 val DarkGold = Color(0xFFE0B45A)

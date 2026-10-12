@@ -2,6 +2,7 @@ package com.hdu.cetvocab.data
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.time.LocalDate
@@ -52,92 +53,128 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         db.execSQL("CREATE TABLE app_meta(k TEXT PRIMARY KEY, v TEXT NOT NULL)")
     }
 
+    /**
+     * 逐版本累加的迁移链。
+     *
+     * 注意：这里**绝不能**出现「版本跨度不认识就 DROP 全部表」的兜底分支。
+     * 历史实现写的是 `if (oldVersion < 2) { 迁移 } else { DROP 五张表; onCreate() }`，
+     * 当前 DB_VERSION=2 所以那段永远不会执行，但只要将来把版本提到 3，
+     * `oldVersion == 2` 就会落进 else —— 用户全部学习进度、成绩、成就会被静默清空。
+     *
+     * 因此改成「一档一档往下走」的形式：新增版本时只在末尾续写一个 if，旧数据始终保留。
+     * 判断统一用 `oldVersion < N`（而不是维护一个中间变量），
+     * 因为迁移是按顺序累加的：oldVersion=1 时 v2、v3 两档会依次执行，语义等价。
+     */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             // v1 -> v2：word_state 增加 SM-2 间隔重复字段，用 ALTER 保留用户已有学习数据
             db.execSQL("ALTER TABLE word_state ADD COLUMN ease REAL NOT NULL DEFAULT 2.5")
             db.execSQL("ALTER TABLE word_state ADD COLUMN reps INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE word_state ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 0")
-        } else {
-            // 其它版本跨度无法逐列迁移，回退为重建空表
-            db.execSQL("DROP TABLE IF EXISTS word_state")
-            db.execSQL("DROP TABLE IF EXISTS study_log")
-            db.execSQL("DROP TABLE IF EXISTS quiz_record")
-            db.execSQL("DROP TABLE IF EXISTS achievement")
-            db.execSQL("DROP TABLE IF EXISTS app_meta")
-            onCreate(db)
         }
+
+        // 后续版本在此续写，例如：
+        // if (oldVersion < 3) { db.execSQL("ALTER TABLE ...") }
+        // 迁移一律用 ALTER / UPDATE 增量完成，不做破坏性重建。
     }
 
     // ---------- 单词状态 ----------
 
     fun states(): Map<Int, WordState> {
         val map = HashMap<Int, WordState>()
-        readableDatabase.rawQuery(
-            "SELECT word_id,level,wrong_count,fav,last_ts,next_review_ts," +
-                "ease,reps,interval_days FROM word_state", null
-        ).use { c ->
-            while (c.moveToNext()) {
-                map[c.getInt(0)] = WordState(
-                    wordId = c.getInt(0),
-                    level = c.getInt(1),
-                    wrongCount = c.getInt(2),
-                    fav = c.getInt(3) == 1,
-                    lastTs = c.getLong(4),
-                    nextReviewTs = c.getLong(5),
-                    ease = c.getDouble(6),
-                    reps = c.getInt(7),
-                    intervalDays = c.getInt(8)
-                )
-            }
+        readableDatabase.rawQuery("SELECT $STATE_COLUMNS FROM word_state", null).use { c ->
+            while (c.moveToNext()) map[c.getInt(0)] = c.toWordState()
         }
         return map
     }
 
+    /**
+     * 取单个单词的状态。
+     *
+     * 注意：**不要**写成 `states()[wordId]`。那样每取一个词都要把整张 word_state 表
+     * 读进内存，而本方法在 markLearned / toggleFav / answerWord 里被逐词调用，
+     * 学一组 50 个词就会退化成 O(N²) 的全表扫描。
+     */
     fun stateOf(wordId: Int): WordState =
-        states()[wordId] ?: WordState(wordId)
+        readableDatabase.rawQuery(
+            "SELECT $STATE_COLUMNS FROM word_state WHERE word_id=?",
+            arrayOf(wordId.toString())
+        ).use { c -> if (c.moveToFirst()) c.toWordState() else WordState(wordId) }
 
+    /**
+     * 记录一次作答结果。
+     *
+     * 「读旧值 → 算新值 → 整体 REPLACE」这三步必须放在同一个事务里：
+     * 否则两个并发的作答（例如连点两下按钮）会各自读到同一个旧 wrong_count，
+     * 后写入的那个把先写入的覆盖掉，导致答错次数丢失。
+     */
     fun markLearned(
         wordId: Int, level: Int, nextReviewTs: Long,
         ease: Double, reps: Int, intervalDays: Int, correct: Boolean
     ) {
-        val now = System.currentTimeMillis()
-        val existing = stateOf(wordId)
-        // 只有答错才累加错误次数。注意不能用 level 判断对错：首次答对时 level 同样是 1，
-        // 若按 level <= 1 记错，会把所有新学且答对的词都误计入错词本。
-        val wrong = if (correct) existing.wrongCount else existing.wrongCount + 1
-        val cv = ContentValues().apply {
-            put("word_id", wordId)
-            put("level", level)
-            put("wrong_count", wrong)
-            put("fav", if (existing.fav) 1 else 0)
-            put("last_ts", now)
-            put("next_review_ts", nextReviewTs)
-            put("ease", ease)
-            put("reps", reps)
-            put("interval_days", intervalDays)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val existing = stateOf(wordId)
+            // 只有答错才累加错误次数。注意不能用 level 判断对错：首次答对时 level 同样是 1，
+            // 若按 level <= 1 记错，会把所有新学且答对的词都误计入错词本。
+            val wrong = if (correct) existing.wrongCount else existing.wrongCount + 1
+            val cv = ContentValues().apply {
+                put("word_id", wordId)
+                put("level", level)
+                put("wrong_count", wrong)
+                put("fav", if (existing.fav) 1 else 0)
+                put("last_ts", System.currentTimeMillis())
+                put("next_review_ts", nextReviewTs)
+                put("ease", ease)
+                put("reps", reps)
+                put("interval_days", intervalDays)
+            }
+            db.insertWithOnConflict("word_state", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
-        writableDatabase.insertWithOnConflict(
-            "word_state", null, cv, SQLiteDatabase.CONFLICT_REPLACE
-        )
     }
 
-    fun setFav(wordId: Int, fav: Boolean) {
-        val existing = stateOf(wordId)
-        val cv = ContentValues().apply {
-            put("word_id", wordId)
-            put("level", existing.level)
-            put("wrong_count", existing.wrongCount)
-            put("fav", if (fav) 1 else 0)
-            put("last_ts", existing.lastTs)
-            put("next_review_ts", existing.nextReviewTs)
-            put("ease", existing.ease)
-            put("reps", existing.reps)
-            put("interval_days", existing.intervalDays)
+    /**
+     * 切换收藏，返回切换后的新值。
+     *
+     * 「读旧值 → 取反 → 写回」必须在同一个事务里完成。
+     * 历史实现是 `setFav(id, !stateOf(id).fav)`：读与写是两次独立的数据库调用，
+     * 中间存在窗口 —— 用户连点两下时，两次都会读到同一个旧值、算出同一个新值，
+     * 结果只翻转了一次（用户以为取消了收藏，实际仍处于收藏状态）。
+     *
+     * 写入只更新 fav 这一列：早期实现会把整行读出来再原样写回，
+     * 期间若有别的写入（例如同时答对一题）就会被这次回写覆盖掉。
+     * 行不存在时才插入（其余列走建表默认值）。
+     */
+    fun toggleFav(wordId: Int): Boolean {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val next = !stateOf(wordId).fav
+            val updated = db.update(
+                "word_state",
+                ContentValues().apply { put("fav", if (next) 1 else 0) },
+                "word_id=?",
+                arrayOf(wordId.toString())
+            )
+            if (updated == 0) {
+                db.insertWithOnConflict(
+                    "word_state", null,
+                    ContentValues().apply {
+                        put("word_id", wordId)
+                        put("fav", if (next) 1 else 0)
+                    },
+                    SQLiteDatabase.CONFLICT_IGNORE
+                )
+            }
+            db.setTransactionSuccessful()
+            return next
+        } finally {
+            db.endTransaction()
         }
-        writableDatabase.insertWithOnConflict(
-            "word_state", null, cv, SQLiteDatabase.CONFLICT_REPLACE
-        )
     }
 
     // ---------- 学习日志 ----------
@@ -275,16 +312,23 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         return map
     }
 
+    /**
+     * 解锁成就。
+     *
+     * 用单条 INSERT + CONFLICT_IGNORE 判断是否「本次真的解锁了」：
+     * 插入成功返回行号，主键冲突被忽略时返回 -1。这样既避免了
+     * 「先查是否存在、再插入」的竞态（并发时会重复上报解锁），
+     * 也省掉了每次 unlock 都把整张 achievement 表读一遍的开销。
+     */
     fun unlock(code: String): Boolean {
-        if (achievements().containsKey(code)) return false
         val cv = ContentValues().apply {
             put("code", code)
             put("unlocked_ts", System.currentTimeMillis())
         }
-        writableDatabase.insertWithOnConflict(
+        val rowId = writableDatabase.insertWithOnConflict(
             "achievement", null, cv, SQLiteDatabase.CONFLICT_IGNORE
         )
-        return true
+        return rowId != -1L
     }
 
     // ---------- 通用 meta ----------
@@ -304,10 +348,18 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         )
     }
 
+    /** 累加学习时长。读改写同样放在事务里，避免并发时后写覆盖先写。 */
     fun addStudySeconds(seconds: Long) {
         if (seconds <= 0) return
-        val cur = getMeta("study_seconds", "0").toLongOrNull() ?: 0L
-        setMeta("study_seconds", (cur + seconds).toString())
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val cur = getMeta("study_seconds", "0").toLongOrNull() ?: 0L
+            setMeta("study_seconds", (cur + seconds).toString())
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun studySeconds(): Long = getMeta("study_seconds", "0").toLongOrNull() ?: 0L
@@ -316,6 +368,23 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         const val DB_NAME = "user_data.db"
         const val DB_VERSION = 2
 
+        /** word_state 的全部列，顺序与 [toWordState] 的下标严格对应 */
+        private const val STATE_COLUMNS =
+            "word_id,level,wrong_count,fav,last_ts,next_review_ts,ease,reps,interval_days"
+
         fun today(): String = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
     }
 }
+
+/** 把 word_state 的一行按 [UserDb.STATE_COLUMNS] 的顺序映射成 [WordState] */
+private fun Cursor.toWordState(): WordState = WordState(
+    wordId = getInt(0),
+    level = getInt(1),
+    wrongCount = getInt(2),
+    fav = getInt(3) == 1,
+    lastTs = getLong(4),
+    nextReviewTs = getLong(5),
+    ease = getDouble(6),
+    reps = getInt(7),
+    intervalDays = getInt(8)
+)

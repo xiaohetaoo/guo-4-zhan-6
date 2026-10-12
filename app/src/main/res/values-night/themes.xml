@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色：状态栏图标用浅色，避免「深底 + 深色图标」导致状态栏不可读 -->
+    <style name="Theme.CetVocab" parent="Theme.CetVocab.Base">
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

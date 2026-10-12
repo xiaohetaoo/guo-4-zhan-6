@@ -7,13 +7,39 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.random.Random
 
-/** 闯关题目 */
+/**
+ * 闯关题目。
+ *
+ * 早期只有「选义」与「拼写」两种题型，靠 `spelling` 一个布尔量区分；
+ * 加入「易混词辨析」与「真题句子翻译」后再加布尔量就会变成状态组合爆炸，
+ * 因此统一收敛到 [kind] 上，保留 `spelling` 只是为了兼容旧调用点。
+ *
+ * 两种新题型的差异：
+ * - [QuizKind.CONFUSABLE]  单选，`prompt` 是中文释义，选项是四个形近词；
+ * - [QuizKind.TRANSLATION] 多选，`prompt` 是中文句子，`correctSet` 是全部可接受译法。
+ */
 data class QuizQuestion(
     val word: Word,
     val options: List<String>,
     val correctIndex: Int,
-    val spelling: Boolean
-)
+    val spelling: Boolean,
+    val kind: QuizKind = if (spelling) QuizKind.SPELLING else QuizKind.MEANING,
+    /** 多选题的全部正确下标；单选题留空，判分时走 [answerSet] */
+    val correctSet: Set<Int> = emptySet(),
+    /** 题干：辨析题为中文释义，翻译题为中文句子；为空时展示单词本身 */
+    val prompt: String = "",
+    /** 揭晓答案后的解析 */
+    val analysis: String = "",
+    /** 辨析题专用：每个选项「单词 — 释义」的对照，便于横向比较 */
+    val optionNotes: List<String> = emptyList()
+) {
+    /** 是否需要多选 */
+    val multi: Boolean get() = kind == QuizKind.TRANSLATION
+
+    /** 正确选项集合：单选与多选都归一成集合，判分逻辑只需写一份 */
+    val answerSet: Set<Int>
+        get() = if (correctSet.isNotEmpty()) correctSet else setOf(correctIndex)
+}
 
 /** 业务聚合层：词库 + 用户数据 + 复习算法 + 成就判定 */
 class VocabRepository(context: Context) {
@@ -103,11 +129,13 @@ class VocabRepository(context: Context) {
         return newLevel
     }
 
-    fun toggleFav(word: Word): Boolean {
-        val now = !userDb.stateOf(word.id).fav
-        userDb.setFav(word.id, now)
-        return now
-    }
+    /**
+     * 切换收藏并返回新值。
+     *
+     * 翻转动作下沉到 [UserDb.toggleFav]，在同一个数据库事务里完成「读旧值 + 写新值」，
+     * 避免这里 `!stateOf(id).fav` 再 `setFav(...)` 两次调用之间的竞态。
+     */
+    fun toggleFav(word: Word): Boolean = userDb.toggleFav(word.id)
 
     // ---------------- 学习计划 ----------------
 
@@ -147,13 +175,6 @@ class VocabRepository(context: Context) {
 
     fun unitWords(unit: Int): List<Word> = wordDb.wordsOfUnit(stage, unit)
 
-    fun unitProgress(unit: Int): Pair<Int, Int> {
-        val states = userDb.states()
-        val words = wordDb.wordsOfUnit(stage, unit)
-        val learned = words.count { (states[it.id]?.level ?: 0) > 0 }
-        return learned to words.size
-    }
-
     fun favWords(): List<Word> {
         val ids = userDb.states().values.filter { it.fav }.map { it.wordId }
         return wordDb.wordsByIds(ids).sortedBy { it.word }
@@ -181,6 +202,91 @@ class VocabRepository(context: Context) {
     /** 首字母挑战：从该首字母下的全部单词随机抽题（字母不分大小写）。 */
     fun buildLetterQuiz(letter: Char, count: Int = 10, spellingRatio: Float = 0.25f): List<QuizQuestion> =
         buildQuizFromPool(wordDb.wordsByInitial(stage, letter), count, spellingRatio)
+
+    /**
+     * 易混词辨析：给出中文释义，从四个形近词里挑出对应的单词。
+     *
+     * 语料直接用词库内置的 `similar`（形近词）字段，不额外造数据，
+     * 因此本级只要还有词就能一直出新题，不存在题库耗尽的边界。
+     */
+    fun buildConfusableQuiz(count: Int = 10): List<QuizQuestion> {
+        // 干扰项要凑够 3 个，所以只挑形近词不少于 3 个的词条
+        val pool = wordDb.wordsOfStage(stage).filter { it.similarList.size >= 3 }
+        if (pool.size < 4) return emptyList()
+        val random = Random(System.nanoTime())
+        return pool.shuffled(random).take(count).mapNotNull { word ->
+            val candidates = word.similarList
+                // 形近词里混着 airplane / aeroplane 这类同义异形条目，
+                // 留着当干扰项会让一道题出现两个正确答案，必须剔除
+                .filter { it.first != word.word && it.second != word.translation }
+                .shuffled(random)
+                .take(3)
+            if (candidates.size < 3) return@mapNotNull null
+            val entries = (candidates + (word.word to word.translation)).shuffled(random)
+            val answer = entries.indexOfFirst { it.first == word.word }
+            // 极端兜底：万一目标词没进选项（理论上不会），直接放弃这道题
+            if (answer < 0) return@mapNotNull null
+            QuizQuestion(
+                word = word,
+                options = entries.map { it.first },
+                correctIndex = answer,
+                spelling = false,
+                kind = QuizKind.CONFUSABLE,
+                prompt = word.translation,
+                optionNotes = entries.map { "${it.first}  ${it.second}" },
+                analysis = "「${word.translation}」对应 ${word.word}。" +
+                    "四个词分别为：${entries.joinToString("；") { "${it.first} = ${it.second}" }}"
+            )
+        }
+    }
+
+    /**
+     * 真题句子翻译：给出中文句子，从四个英文译文里选出**全部**正确译法。
+     *
+     * 每题都有两个可接受译法（一个直译、一个替换措辞的活译），
+     * 用来训练「同一个意思可以有多种地道表达」，这也是四六级翻译的评分取向。
+     * 必须全选对才算答对 —— 少选说明还没吃透，按错处理并给出解析。
+     */
+    fun buildTranslationQuiz(count: Int = 10): List<QuizQuestion> {
+        val items = wordDb.translationItems(stage)
+        if (items.isEmpty()) return emptyList()
+        val random = Random(System.nanoTime())
+        return items.shuffled(random).take(count).map { item ->
+            // 关键词词条只用于展示音标与朗读；题库里的词都是本级大纲词，
+            // 万一查不到就用最小占位词条兜底，保证题目本身仍可作答
+            val keywordWord = wordDb.wordByText(item.keyword, item.stage)
+                ?: placeholderWord(item.keyword, item.stage)
+            QuizQuestion(
+                word = keywordWord,
+                options = item.options,
+                correctIndex = item.correct.min(),
+                spelling = false,
+                kind = QuizKind.TRANSLATION,
+                correctSet = item.correct,
+                prompt = item.chinese,
+                analysis = item.analysis
+            )
+        }
+    }
+
+    /** 关键词查不到词条时的占位对象，避免为了非空而伪造释义 */
+    private fun placeholderWord(text: String, wordStage: Int) = Word(
+        id = 0,
+        word = text,
+        phonetic = "",
+        translation = "",
+        transDetail = "",
+        definition = "",
+        pos = "",
+        stage = wordStage,
+        unit = 0,
+        rank = 0,
+        sentence = "",
+        sentenceCn = "",
+        roots = "",
+        similar = "",
+        mnemonic = ""
+    )
 
     private fun buildQuizFromPool(
         pool: List<Word>,
@@ -268,8 +374,14 @@ class VocabRepository(context: Context) {
         return best
     }
 
-    fun overview(): StudyOverview {
-        val states = userDb.states()
+    /**
+     * 学习总览。
+     *
+     * [preloadedStates] 用于避免重复读表：调用方（如 [evaluateAchievements]）往往
+     * 已经拿到了 states，再让 overview 自己查一次就是白白多一次全表扫描。
+     */
+    fun overview(preloadedStates: Map<Int, WordState>? = null): StudyOverview {
+        val states = preloadedStates ?: userDb.states()
         val (correct, wrong) = userDb.correctWrongTotals()
         val seconds = userDb.studySeconds() + userDb.quizTotalMs() / 1000
         return StudyOverview(
@@ -292,10 +404,17 @@ class VocabRepository(context: Context) {
 
     fun unlockedAchievements(): Map<String, Long> = userDb.achievements()
 
+    /**
+     * 评估并解锁成就。
+     *
+     * 性能注意：本方法在「每答一个单词」时都会被调用一次，因此这里
+     * **只读一次 states 表**并把结果透传给 [overview]，
+     * 否则单次调用就要扫两遍全表，学一组 50 个词会累积上百次全表扫描。
+     */
     fun evaluateAchievements(lastQuiz: QuizRecord? = null): List<AchievementDef> {
         val gained = ArrayList<AchievementDef>()
-        val ov = overview()
         val states = userDb.states()
+        val ov = overview(preloadedStates = states)
         val favCount = states.count { it.value.fav }
         val hour = LocalTime.now().hour
 
@@ -323,6 +442,8 @@ class VocabRepository(context: Context) {
         tryUnlock(Achievements.NIGHT_OWL, hour >= 22 && ov.totalLearned >= 1)
         tryUnlock(Achievements.EARLY_BIRD, hour in 1..6 && ov.totalLearned >= 1)
 
+        // 本次闯关专属的成就。QUIZ_SCORE_300 上面已按历史最高分判过一次，
+        // 这里再按「本局得分」判一次是有意为之：本局刷出高分也应立即解锁。
         lastQuiz?.let {
             tryUnlock(Achievements.QUIZ_PERFECT, it.total > 0 && it.correct == it.total)
             tryUnlock(Achievements.QUIZ_COMBO_10, it.maxCombo >= 10)

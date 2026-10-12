@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -33,9 +34,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +50,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,26 +61,34 @@ import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.AppTopBar
+import com.hdu.cetvocab.ui.components.BulletRow
+import com.hdu.cetvocab.ui.components.IconChevronRight
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.util.LauncherIcons
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val state by vm.profile.collectAsState()
     var showReset by remember { mutableStateOf(false) }
 
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // 每日目标滑杆：拖动过程中只更新本地值，松手才落盘，
+    // 避免拖动时每帧都写偏好并触发整页刷新。
+    var goalSlider by remember(state.goal) { mutableFloatStateOf(state.goal.toFloat()) }
+    // 语速滑杆同理：此前是每帧调 vm.setSpeechRate()，等于每帧写一次盘 + 刷新整页。
+    var rateSlider by remember(state.speechRate) { mutableFloatStateOf(state.speechRate) }
 
-    // 结果提示：标题 -> 绝对路径（path 为空表示普通提示）
-    var pathTip by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var plainTip by remember { mutableStateOf<Pair<String, String>?>(null) }
-    // 恢复流程状态
+    val context = LocalContext.current
+
+    // 导出 / 备份 / 恢复的结果由 ViewModel 统一持有：
+    // 这些是文件 IO，不能在页面作用域里跑（用户一离开页面协程就被取消，
+    // 会留下写了一半的文件）。
+    val fileDone by vm.fileDone.collectAsState()
+    val fileError by vm.fileError.collectAsState()
+
+    // 恢复流程状态（纯 UI 选择，不需要跨页面存活）
     var restoreChoices by remember { mutableStateOf<List<File>>(emptyList()) }
     var restoreTarget by remember { mutableStateOf<File?>(null) }
 
@@ -86,16 +97,9 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
         cm.setPrimaryClip(ClipData.newPlainText("path", path))
     }
 
-    fun showError(message: String) {
-        plainTip = "操作失败" to message
-    }
-
-    // 统一的 IO 执行：成功回调文件，失败弹错误框
-    fun runExport(title: String, block: () -> File) {
-        scope.launch {
-            runCatching { withContext(Dispatchers.IO) { block() } }
-                .onSuccess { pathTip = title to it.absolutePath }
-                .onFailure { showError(it.message ?: it.toString()) }
+    fun pickRestore() {
+        vm.loadBackups { files ->
+            if (files.size == 1) restoreTarget = files.first() else restoreChoices = files
         }
     }
 
@@ -111,42 +115,58 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 AppCard {
                     SectionTitle(text = "学习计划")
                     Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = "每日学习目标",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        text = "每天计划新学 ${state.goal} 个单词，复习到期的单词不占用目标额度",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(10, 15, 20, 30, 50).forEach { g ->
-                            val selected = state.goal == g
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        if (selected) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                    .clickable { vm.setDailyGoal(g) }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "$g",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (selected) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "每日学习目标",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "复习到期的单词不占用目标额度",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+                        Text(
+                            text = "${goalSlider.roundToInt()}",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            text = "词/天",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 3.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Slider(
+                        value = goalSlider,
+                        onValueChange = { goalSlider = it },
+                        onValueChangeFinished = { vm.setDailyGoal(goalSlider.roundToInt()) },
+                        valueRange = 5f..100f,
+                        steps = 18,
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "5",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = "100",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
@@ -183,7 +203,11 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                         if (selected) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.surfaceVariant
                                     )
-                                    .clickable { vm.setThemeMode(mode) }
+                                    .selectable(
+                                        selected = selected,
+                                        role = Role.RadioButton,
+                                        onClick = { vm.setThemeMode(mode) }
+                                    )
                                     .padding(vertical = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -235,8 +259,9 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             modifier = Modifier.width(46.dp)
                         )
                         Slider(
-                            value = state.speechRate,
-                            onValueChange = { vm.setSpeechRate(it) },
+                            value = rateSlider,
+                            onValueChange = { rateSlider = it },
+                            onValueChangeFinished = { vm.setSpeechRate(rateSlider) },
                             valueRange = 0.5f..1.4f,
                             modifier = Modifier.weight(1f),
                             colors = SliderDefaults.colors(
@@ -245,7 +270,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             )
                         )
                         Text(
-                            text = String.format("%.2fx", state.speechRate),
+                            text = String.format("%.2fx", rateSlider),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.width(48.dp)
@@ -333,14 +358,11 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         "发音调用系统 TTS 引擎，同样无需联网",
                         "学习进度、成绩与成就仅保存在本机数据库，不上传任何服务器"
                     ).forEach {
-                        Row(modifier = Modifier.padding(vertical = 3.dp)) {
-                            Text("· ", color = LocalAppColors.current.success, fontWeight = FontWeight.Bold)
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        BulletRow(
+                            text = it,
+                            modifier = Modifier.padding(vertical = 3.dp),
+                            dotColor = LocalAppColors.current.success
+                        )
                     }
                 }
             }
@@ -356,14 +378,11 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         "词根词缀与形近词：由上述开源数据自动构建",
                         "图标与界面元素：应用内自行绘制，不含第三方图片素材"
                     ).forEach {
-                        Row(modifier = Modifier.padding(vertical = 3.dp)) {
-                            Text("· ", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        BulletRow(
+                            text = it,
+                            modifier = Modifier.padding(vertical = 3.dp),
+                            dotColor = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -377,37 +396,25 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         title = "导出学习记录（CSV）",
                         desc = "含掌握等级、错误次数、上次学习与下次复习时间",
                         iconKind = 1,
-                        onClick = { runExport("学习记录已导出") { vm.backup.exportStudyCsv() } }
+                        onClick = { vm.exportStudyCsv() }
                     )
                     ActionRow(
                         title = "导出单词本（CSV）",
                         desc = "仅导出收藏的生词，按字母序排列",
                         iconKind = 2,
-                        onClick = { runExport("单词本已导出") { vm.backup.exportFavCsv() } }
+                        onClick = { vm.exportFavCsv() }
                     )
                     ActionRow(
                         title = "备份数据（JSON）",
                         desc = "完整备份学习进度、成绩、成就与设置",
                         iconKind = 3,
-                        onClick = { runExport("数据已备份") { vm.backup.backupJson() } }
+                        onClick = { vm.backupJson() }
                     )
                     ActionRow(
                         title = "恢复数据",
                         desc = "从备份文件恢复，将覆盖当前全部学习数据",
                         iconKind = 4,
-                        onClick = {
-                            scope.launch {
-                                runCatching { withContext(Dispatchers.IO) { vm.backup.listBackups() } }
-                                    .onSuccess { files ->
-                                        when {
-                                            files.isEmpty() -> showError("备份目录中还没有任何备份文件")
-                                            files.size == 1 -> restoreTarget = files.first()
-                                            else -> restoreChoices = files
-                                        }
-                                    }
-                                    .onFailure { showError(it.message ?: it.toString()) }
-                            }
-                        }
+                        onClick = { pickRestore() }
                     )
                     Spacer(Modifier.height(6.dp))
                     Row(
@@ -415,7 +422,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(LocalAppColors.current.danger.copy(alpha = 0.10f))
-                            .clickable { showReset = true }
+                            .clickable(role = Role.Button) { showReset = true }
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -443,7 +450,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Text("›", fontSize = 20.sp, color = LocalAppColors.current.danger)
+                        IconChevronRight(
+                            modifier = Modifier.size(16.dp),
+                            color = LocalAppColors.current.danger
+                        )
                     }
                 }
             }
@@ -466,24 +476,24 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     if (showReset) {
         AlertDialog(
             onDismissRequest = { showReset = false },
-            title = { Text("确认清空全部数据？") },
-            text = { Text("学习进度、闯关成绩与成就记录都会被删除，且无法恢复。") },
+            title = { Text(stringResource(R.string.reset_confirm_title)) },
+            text = { Text(stringResource(R.string.reset_confirm_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     vm.resetAll()
                     showReset = false
-                }) { Text("确认清空", color = LocalAppColors.current.danger) }
+                }) { Text(stringResource(R.string.action_reset_confirm), color = LocalAppColors.current.danger) }
             },
             dismissButton = {
-                TextButton(onClick = { showReset = false }) { Text("取消") }
+                TextButton(onClick = { showReset = false }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
 
     // 导出/备份成功：展示绝对路径 + 复制路径
-    pathTip?.let { (title, path) ->
+    fileDone?.let { (title, path) ->
         AlertDialog(
-            onDismissRequest = { pathTip = null },
+            onDismissRequest = { vm.consumeFileDone() },
             title = { Text(title) },
             text = {
                 Column {
@@ -501,22 +511,22 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { copyPath(path) }) { Text("复制路径") }
+                TextButton(onClick = { copyPath(path) }) { Text(stringResource(R.string.action_copy_path)) }
             },
             dismissButton = {
-                TextButton(onClick = { pathTip = null }) { Text("确定") }
+                TextButton(onClick = { vm.consumeFileDone() }) { Text(stringResource(R.string.action_ok)) }
             }
         )
     }
 
-    // 普通提示 / 错误
-    plainTip?.let { (title, message) ->
+    // 文件任务失败
+    fileError?.let { message ->
         AlertDialog(
-            onDismissRequest = { plainTip = null },
-            title = { Text(title) },
+            onDismissRequest = { vm.consumeFileError() },
+            title = { Text(stringResource(R.string.title_operation_failed)) },
             text = { Text(message) },
             confirmButton = {
-                TextButton(onClick = { plainTip = null }) { Text("确定") }
+                TextButton(onClick = { vm.consumeFileError() }) { Text(stringResource(R.string.action_ok)) }
             }
         )
     }
@@ -525,7 +535,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     if (restoreChoices.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { restoreChoices = emptyList() },
-            title = { Text("选择要恢复的备份") },
+            title = { Text(stringResource(R.string.restore_pick_title)) },
             text = {
                 Column {
                     restoreChoices.forEach { f ->
@@ -536,7 +546,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable {
+                                .clickable(role = Role.Button) {
                                     restoreTarget = f
                                     restoreChoices = emptyList()
                                 }
@@ -546,7 +556,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { restoreChoices = emptyList() }) { Text("取消") }
+                TextButton(onClick = { restoreChoices = emptyList() }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -555,7 +565,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     restoreTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { restoreTarget = null },
-            title = { Text("确认恢复数据？") },
+            title = { Text(stringResource(R.string.restore_confirm_title)) },
             text = {
                 Text(
                     "将用备份「${target.name}」覆盖当前全部学习数据" +
@@ -564,20 +574,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val file = target
                     restoreTarget = null
-                    scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { vm.backup.restore(file) } }
-                            .onSuccess {
-                                vm.refreshAll()
-                                plainTip = "恢复完成" to "已从「${file.name}」恢复学习数据。"
-                            }
-                            .onFailure { showError(it.message ?: it.toString()) }
-                    }
-                }) { Text("确认恢复", color = LocalAppColors.current.danger) }
+                    vm.restoreBackup(target)
+                }) { Text(stringResource(R.string.action_restore_confirm), color = LocalAppColors.current.danger) }
             },
             dismissButton = {
-                TextButton(onClick = { restoreTarget = null }) { Text("取消") }
+                TextButton(onClick = { restoreTarget = null }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
@@ -585,7 +587,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
 
 @Composable
 private fun ActionIcon(kind: Int) {
-    val stroke = Color.White
+    // 描边必须跟随主题取反色。
+    // 此前写死 Color.White，而底色用的是主题主色：深色主题下主色是较亮的橙
+    // （DarkPrimary #FFF0855A），白描边压亮橙对比度极低，四个图标几乎看不清。
+    val stroke = MaterialTheme.colorScheme.onPrimary
     val sw = 2.2.dp
     Canvas(modifier = Modifier.size(20.dp)) {
         val s = size
@@ -701,7 +706,7 @@ private fun ActionRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(accent.copy(alpha = 0.08f))
-            .clickable { onClick() }
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -729,7 +734,10 @@ private fun ActionRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Text("›", fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
+        IconChevronRight(
+            modifier = Modifier.size(16.dp),
+            color = MaterialTheme.colorScheme.primary
+        )
     }
 }
 
@@ -773,7 +781,12 @@ private fun IconOption(
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f),
                 shape = RoundedCornerShape(16.dp)
             )
-            .clickable { onClick() }
+            // 二选一，用单选语义：TalkBack 会朗读「已选中 / 未选中」
+            .selectable(
+                selected = selected,
+                role = Role.RadioButton,
+                onClick = onClick
+            )
             .padding(vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

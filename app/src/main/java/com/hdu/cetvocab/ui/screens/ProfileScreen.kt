@@ -31,16 +31,23 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Achievements
 import com.hdu.cetvocab.data.Tier
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
 import com.hdu.cetvocab.ui.components.AppCard
+import com.hdu.cetvocab.ui.components.IconChevronRight
+import com.hdu.cetvocab.ui.components.IconFlame
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.StatTile
 import com.hdu.cetvocab.ui.components.Tag
@@ -110,12 +117,21 @@ fun ProfileScreen(
                     }
                     Spacer(Modifier.width(18.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (ov.streakDays >= 10) "已连续打卡 ${ov.streakDays} 天 🔥"
-                            else "连续打卡 ${ov.streakDays} 天",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (ov.streakDays >= 10) "已连续打卡 ${ov.streakDays} 天"
+                                else "连续打卡 ${ov.streakDays} 天",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (ov.streakDays >= 10) {
+                                Spacer(Modifier.width(5.dp))
+                                IconFlame(
+                                    modifier = Modifier.size(15.dp),
+                                    color = LocalAppColors.current.fire
+                                )
+                            }
+                        }
                         Spacer(Modifier.height(6.dp))
                         Text(
                             text = "历史最长连续 ${ov.bestStreak} 天 · 累计学习 ${ov.totalMinutes} 分钟",
@@ -183,15 +199,25 @@ fun ProfileScreen(
                     text = "成就（$unlockedCount / ${Achievements.ALL.size}）",
                     accent = LocalAppColors.current.gold,
                     trailing = {
-                        Text(
-                            text = "全部 ›",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { onOpenAchievements() }
+                                .clickable(role = Role.Button) { onOpenAchievements() }
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
+                        ) {
+                            Text(
+                                text = "全部",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            IconChevronRight(
+                                modifier = Modifier
+                                    .padding(start = 1.dp)
+                                    .size(13.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 )
                 Spacer(Modifier.height(12.dp))
@@ -238,12 +264,16 @@ fun ProfileScreen(
 
 @Composable
 private fun IconBox(onClick: () -> Unit) {
+    // 齿轮是 Canvas 自绘、没有任何语义，必须显式给出朗读文本，
+    // 否则 TalkBack 只会念出一个无名的「按钮」。
+    val settingsLabel = stringResource(R.string.title_settings)
     Box(
         modifier = Modifier
             .size(40.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable { onClick() },
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = settingsLabel },
         contentAlignment = Alignment.Center
     ) {
         GearIcon(
@@ -361,7 +391,7 @@ private fun MenuRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onClick() }
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -386,9 +416,8 @@ private fun MenuRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Text(
-            text = "›",
-            fontSize = 20.sp,
+        IconChevronRight(
+            modifier = Modifier.size(16.dp),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }

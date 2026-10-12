@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色模式窗口配色。数值与 ui/theme/Color.kt 中的
+      DarkBackground(0xFF1C1815) / DarkSurface(0xFF262019) / DarkOnBackground(0xFFF0E6DD)
+      一一对应，保证「XML 窗口底色」与「Compose 首帧背景」颜色一致，看不出接缝。
+    -->
+    <color name="warm_background">#FF1C1815</color>
+    <color name="warm_surface">#FF262019</color>
+    <color name="warm_on_background">#FFF0E6DD</color>
+</resources>

@@ -13,11 +13,8 @@ import androidx.compose.ui.graphics.Color
 data class AppColors(
     // 语义色
     val success: Color,
-    val successSoft: Color,
     val warning: Color,
-    val warningSoft: Color,
     val danger: Color,
-    val dangerSoft: Color,
     val star: Color,
     val fire: Color,
     val gold: Color,
@@ -39,11 +36,8 @@ data class AppColors(
 /** 浅色实例：色值与原 [Color.kt] 中的常量一一对应，数值不变 */
 val LightAppColors = AppColors(
     success = ColorSuccess,
-    successSoft = ColorSuccessSoft,
     warning = ColorWarning,
-    warningSoft = ColorWarningSoft,
     danger = ColorDanger,
-    dangerSoft = ColorDangerSoft,
     star = ColorStar,
     fire = ColorFire,
     gold = ColorGold,
@@ -63,11 +57,8 @@ val LightAppColors = AppColors(
 /** 深色实例 */
 val DarkAppColors = AppColors(
     success = DarkSuccess,
-    successSoft = DarkSuccessSoft,
     warning = DarkWarning,
-    warningSoft = DarkWarningSoft,
     danger = DarkDanger,
-    dangerSoft = DarkDangerSoft,
     star = DarkStar,
     fire = DarkFire,
     gold = DarkGold,

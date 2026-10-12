@@ -5,8 +5,10 @@
       本应用完全离线运行：词库、助记内容、例句全部内置在安装包内，
       发音使用系统自带 TTS 引擎。
       因此刻意【不申请】android.permission.INTERNET，从系统层面保证零联网。
+
+      注意：这里也不再声明 VIBRATE —— 全项目没有任何震动反馈代码，
+      声明一个用不到的权限只会扩大权限面。
     -->
-    <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-feature
         android:name="android.hardware.touchscreen"
@@ -21,9 +23,7 @@
 
     <application
         android:name=".CetVocabApp"
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

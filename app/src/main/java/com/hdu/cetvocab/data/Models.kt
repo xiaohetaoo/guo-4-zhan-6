@@ -66,17 +66,34 @@ data class QuizRecord(
 
 /**
  * 闯关范围编码（`QuizUiState.unit` 与 `QuizRecord.unit` 共用同一套约定）：
- * - `>= 1`  → 单元挑战，值即单元号
- * - `-1`    → 全阶段全词挑战
- * - `<= -2` → 首字母挑战，字母索引 = `-unit - 2`（0 = A，25 = Z）
+ * - `>= 1`    → 单元挑战，值即单元号
+ * - `-1`      → 全阶段全词挑战
+ * - `-2..-27` → 首字母挑战，字母索引 = `-unit - 2`（0 = A，25 = Z）
+ * - `-101`    → 易混词辨析
+ * - `-102`    → 真题句子翻译
+ *
+ * 两个专题关卡刻意取 -101 / -102：首字母最多只用到 -27，
+ * 中间留出大段空档，后续再加专题也不会和已有编码撞车。
  */
 const val QUIZ_SCOPE_ALL = -1
+const val QUIZ_SCOPE_CONFUSABLE = -101
+const val QUIZ_SCOPE_TRANSLATION = -102
 
-/** 首字母对应的闯关范围值 */
-fun quizScopeOfLetter(letter: Char): Int = -(letter.uppercaseChar() - 'A') - 2
+/** 首字母对应的闯关范围值；非 A–Z 字母返回 null */
+fun quizScopeOfLetter(letter: Char): Int? {
+    val upper = letter.uppercaseChar()
+    if (upper !in 'A'..'Z') return null
+    return -(upper - 'A') - 2
+}
 
 /** 闯关范围值对应的首字母；非字母范围返回 null */
-fun quizLetterOfScope(unit: Int): Char? = if (unit <= -2) ('A' + (-unit - 2)) else null
+fun quizLetterOfScope(unit: Int): Char? {
+    if (unit > -2) return null
+    val index = -unit - 2
+    // 越界时返回 null 而不是 `'A' + index` 算出乱七八糟的字符
+    if (index !in 0..25) return null
+    return 'A' + index
+}
 
 /** 闯关范围的可读标签，用于答题页标题与排行榜 */
 fun quizScopeLabel(stage: Int, unit: Int): String {
@@ -84,9 +101,38 @@ fun quizScopeLabel(stage: Int, unit: Int): String {
     return when {
         unit >= 1 -> "$prefix · 第 $unit 单元"
         unit == QUIZ_SCOPE_ALL -> "$prefix · 全词挑战"
-        else -> "$prefix · 首字母 ${quizLetterOfScope(unit)}"
+        unit == QUIZ_SCOPE_CONFUSABLE -> "$prefix · 易混词辨析"
+        unit == QUIZ_SCOPE_TRANSLATION -> "$prefix · 真题句子翻译"
+        else -> quizLetterOfScope(unit)?.let { "$prefix · 首字母 $it" } ?: "$prefix · 闯关"
     }
 }
+
+/**
+ * 闯关题型。
+ * - [MEANING]     选出正确释义（四选一）
+ * - [SPELLING]    听音拼写（填空）
+ * - [CONFUSABLE]  易混词辨析：给中文义，从四个形近词里挑出对应单词
+ * - [TRANSLATION] 真题句子翻译：给中文句，从四个译文中挑出全部可接受译法（可多选）
+ */
+enum class QuizKind {
+    MEANING, SPELLING, CONFUSABLE, TRANSLATION
+}
+
+/** 真题句子翻译题（内置题库 translation_quiz） */
+data class TranslationItem(
+    val id: Int,
+    val stage: Int,
+    /** 被考查的关键词 */
+    val keyword: String,
+    /** 中文题干 */
+    val chinese: String,
+    /** 四个英文译文 */
+    val options: List<String>,
+    /** 可接受译法的下标集合（多选题，通常两个 —— 体现「一词多译」） */
+    val correct: Set<Int>,
+    /** 解析：关键词用法 + 其他可接受译法 */
+    val analysis: String
+)
 
 /** 每日学习统计 */
 data class DayStat(
@@ -103,12 +149,6 @@ data class AchievementDef(
     val desc: String,
     val glyph: String,
     val tier: Int   // 1 铜 2 银 3 金
-)
-
-/** 成就解锁记录 */
-data class AchievementRecord(
-    val code: String,
-    val unlockedTs: Long
 )
 
 /** 学习总览 */

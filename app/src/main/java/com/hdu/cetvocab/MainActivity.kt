@@ -18,6 +18,7 @@ import com.hdu.cetvocab.ui.AppRoot
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.theme.CetVocabTheme
 import com.hdu.cetvocab.util.LauncherIcons
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -50,6 +51,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 回到前台：恢复学习时长与闯关用时的计时 */
+    override fun onStart() {
+        super.onStart()
+        vm.onAppForeground()
+    }
+
     /**
      * 桌面图标在这里落地。
      *
@@ -58,10 +65,16 @@ class MainActivity : ComponentActivity() {
      * 用户看到的是「回到桌面 → 图标已经是新的」，切换过程完全无感。
      *
      * [LauncherIcons.apply] 自带幂等判断，状态已经正确时不会产生任何写入。
+     * 这里同时承担「退到后台即停表」——否则用户切出去几分钟再回来，
+     * 这段时间会被算进累计学习时长与本关用时。
      */
     override fun onStop() {
         super.onStop()
+        vm.onAppBackground()
         val app = application as CetVocabApp
-        LauncherIcons.apply(this, app.repo.iconStyle, app.repo.stage)
+        // 放到后台线程执行：写组件状态是跨进程调用，不宜占用主线程
+        app.appScope.launch {
+            runCatching { LauncherIcons.apply(this@MainActivity, app.repo.iconStyle, app.repo.stage) }
+        }
     }
 }

@@ -1,10 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.CetVocab" parent="android:Theme.Material.Light.NoActionBar">
+    <!--
+      公共基样式：只放与深浅色无关的属性。
+      窗口底色 / 状态栏 / 导航栏都引用 @color/*，由 values 与 values-night
+      两套 colors.xml 分别解析，从而在深色模式下不再先闪一帧浅色。
+
+      MainActivity 声明了 configChanges="uiMode"，切换深色不会重建 Activity，
+      运行时的状态栏图标明暗由 Compose 侧 WindowCompat 负责；
+      这里的 windowLightStatusBar 只影响「Compose 首帧之前」的冷启动窗口。
+    -->
+    <style name="Theme.CetVocab.Base" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/warm_background</item>
         <item name="android:statusBarColor">@color/warm_background</item>
         <item name="android:navigationBarColor">@color/warm_surface</item>
-        <item name="android:windowLightStatusBar">true</item>
         <item name="android:textColorPrimary">@color/warm_on_background</item>
+    </style>
+
+    <!-- 浅色：状态栏图标用深色，才能在浅底上看清 -->
+    <style name="Theme.CetVocab" parent="Theme.CetVocab.Base">
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

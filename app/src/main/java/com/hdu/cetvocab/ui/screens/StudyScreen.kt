@@ -34,15 +34,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.ExampleBlock
+import com.hdu.cetvocab.ui.components.IconArrowUp
+import com.hdu.cetvocab.ui.components.IconClose
+import com.hdu.cetvocab.ui.components.IconHeart
+import com.hdu.cetvocab.ui.components.IconTrophy
 import com.hdu.cetvocab.ui.components.LevelDots
 import com.hdu.cetvocab.ui.components.MnemonicBlock
 import com.hdu.cetvocab.ui.components.SectionTitle
@@ -56,23 +65,25 @@ import com.hdu.cetvocab.ui.theme.LocalAppColors
 fun StudyScreen(
     vm: AppViewModel,
     speak: (String) -> Unit,
+    speakAuto: (String) -> Unit,
     onFinish: () -> Unit
 ) {
     val state by vm.study.collectAsState()
+    val closeLabel = stringResource(R.string.action_close)
 
-    // 统计学习时长
+    // 学习时长只累计「本页在前台」的时间，具体计时由 ViewModel 维护：
+    // 它同时知道应用是否退到了后台，能把切出去的那段时间排除掉。
+    // 历史实现是在这里记下进入时刻、onDispose 时一次性结算，
+    // 中途切页面 / 退后台的时间会被一起算进去，导致累计时长虚高。
     DisposableEffect(Unit) {
-        val start = System.currentTimeMillis()
-        onDispose {
-            val sec = (System.currentTimeMillis() - start) / 1000
-            if (sec > 0) vm.addStudySeconds(sec)
-        }
+        vm.onStudyScreenEnter()
+        onDispose { vm.onStudyScreenExit() }
     }
 
-    // 切换单词时自动发音
+    // 切换单词时自动发音：走 speakAuto 入口，内部统一遵守「自动朗读」开关
     LaunchedEffect(state.index, state.finished) {
         val w = state.current
-        if (w != null && vm.autoSpeak) speak(w.word)
+        if (w != null) speakAuto(w.word)
     }
 
     if (state.finished) {
@@ -84,9 +95,12 @@ fun StudyScreen(
     if (word == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("这个队列没有单词", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = stringResource(R.string.study_empty_queue),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onFinish) { Text("返回") }
+                Button(onClick = onFinish) { Text(stringResource(R.string.action_back)) }
             }
         }
         return
@@ -101,10 +115,14 @@ fun StudyScreen(
                         .size(34.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable { onFinish() },
+                        .clickable(role = Role.Button, onClick = onFinish)
+                        .semantics { contentDescription = closeLabel },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("✕", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    IconClose(
+                        modifier = Modifier.size(15.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -159,8 +177,15 @@ fun StudyScreen(
                 animationSpec = tween(260),
                 label = "card"
             ) { flipped ->
-                if (!flipped) CardFront(word, speak, vm, state.favIds.contains(word.id))
-                else CardBack(word, speak)
+                if (!flipped) {
+                    CardFront(
+                        word = word,
+                        speak = speak,
+                        vm = vm,
+                        fav = state.favIds.contains(word.id),
+                        level = state.currentLevel
+                    )
+                } else CardBack(word, speak)
             }
         }
 
@@ -174,7 +199,7 @@ fun StudyScreen(
                         .height(52.dp),
                     shape = RoundedCornerShape(18.dp)
                 ) {
-                    Text("查看释义与例句", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.study_reveal), fontWeight = FontWeight.SemiBold)
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -186,7 +211,7 @@ fun StudyScreen(
                         shape = RoundedCornerShape(18.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = LocalAppColors.current.danger)
                     ) {
-                        Text("不认识", fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.study_unknown), fontWeight = FontWeight.SemiBold)
                     }
                     Button(
                         onClick = { vm.answerCurrent(known = true) },
@@ -196,7 +221,7 @@ fun StudyScreen(
                         shape = RoundedCornerShape(18.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = LocalAppColors.current.success)
                     ) {
-                        Text("认识了", fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.study_known), fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -217,8 +242,12 @@ private fun CardFront(
     word: Word,
     speak: (String) -> Unit,
     vm: AppViewModel,
-    fav: Boolean
+    fav: Boolean,
+    level: Int
 ) {
+    val favLabel = stringResource(
+        if (fav) R.string.cd_fav_remove else R.string.cd_fav_add
+    )
     AppCard(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.surface,
@@ -234,13 +263,15 @@ private fun CardFront(
                     .background(
                         if (fav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant
                     )
-                    .clickable { vm.toggleFavCurrent() },
+                    .clickable(role = Role.Button, onClick = { vm.toggleFavCurrent() })
+                    .semantics { contentDescription = favLabel },
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = if (fav) "♥" else "♡",
-                    fontSize = 18.sp,
-                    color = if (fav) LocalAppColors.current.warning else MaterialTheme.colorScheme.onSurfaceVariant
+                IconHeart(
+                    modifier = Modifier.size(19.dp),
+                    filled = fav,
+                    color = if (fav) LocalAppColors.current.warning
+                    else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -274,7 +305,8 @@ private fun CardFront(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            LevelDots(level = 0)
+            // 此前这里硬编码 0，用户在学习卡正面永远看不到自己对这个词的掌握程度
+            LevelDots(level = level)
             Spacer(Modifier.width(10.dp))
             Text(
                 text = "点击下方按钮查看释义",
@@ -398,10 +430,17 @@ private fun StudySummary(
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = if (rate >= 80) "🎉" else "💪",
-                fontSize = 46.sp
-            )
+            if (rate >= 80) {
+                IconTrophy(
+                    modifier = Modifier.size(62.dp),
+                    color = LocalAppColors.current.gold
+                )
+            } else {
+                IconArrowUp(
+                    modifier = Modifier.size(62.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Spacer(Modifier.height(12.dp))
             Text(
                 text = "本组学习完成",
@@ -445,7 +484,7 @@ private fun StudySummary(
                     .height(50.dp),
                 shape = RoundedCornerShape(18.dp)
             ) {
-                Text("完成", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.action_done), fontWeight = FontWeight.SemiBold)
             }
         }
     }
