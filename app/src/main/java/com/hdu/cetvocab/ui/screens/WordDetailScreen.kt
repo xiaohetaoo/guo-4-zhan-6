@@ -2,6 +2,7 @@ package com.hdu.cetvocab.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +56,7 @@ import com.hdu.cetvocab.ui.components.WordHeadline
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.springPress
 
 @Composable
 fun WordDetailScreen(
@@ -90,12 +92,18 @@ fun WordDetailScreen(
                 val favLabel = stringResource(
                     if (fav) R.string.cd_fav_remove else R.string.cd_fav_add
                 )
+                val favInteraction = remember { MutableInteractionSource() }
                 Box(
                     modifier = Modifier
                         .size(38.dp)
+                        .springPress(favInteraction, pressedScale = 0.86f)
                         .clip(RoundedCornerShape(13.dp))
                         .background(if (fav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable(role = Role.Button) {
+                        .clickable(
+                            interactionSource = favInteraction,
+                            indication = null,
+                            role = Role.Button
+                        ) {
                             word?.let {
                                 fav = !fav
                                 vm.toggleFav(it)

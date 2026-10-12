@@ -3,6 +3,7 @@ package com.hdu.cetvocab.ui.screens
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +54,7 @@ import com.hdu.cetvocab.ui.components.StatTile
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.components.WeekBarChart
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.springPress
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -255,12 +258,19 @@ private fun IconBox(onClick: () -> Unit) {
     // 齿轮是 Canvas 自绘、没有任何语义，必须显式给出朗读文本，
     // 否则 TalkBack 只会念出一个无名的「按钮」。
     val settingsLabel = stringResource(R.string.title_settings)
+    val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
             .size(40.dp)
+            .springPress(interaction, pressedScale = 0.88f)
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick
+            )
             .semantics { contentDescription = settingsLabel },
         contentAlignment = Alignment.Center
     ) {

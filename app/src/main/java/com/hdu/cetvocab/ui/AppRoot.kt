@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -43,6 +44,7 @@ import com.hdu.cetvocab.ui.screens.QuizScreen
 import com.hdu.cetvocab.ui.screens.SettingsScreen
 import com.hdu.cetvocab.ui.screens.StudyScreen
 import com.hdu.cetvocab.ui.screens.WordDetailScreen
+import com.hdu.cetvocab.ui.theme.Motion
 import com.hdu.cetvocab.util.Speech
 
 object Routes {
@@ -65,6 +67,12 @@ private val TABS = listOf(
     Tab(Routes.QUIZ, "闯关", Icons.Filled.PlayArrow),
     Tab(Routes.PROFILE, "我的", Icons.Filled.Person)
 )
+
+/** 底部标签对应的路由集合，用于判断一次转场是「同级平行」还是「进入下一层」。 */
+private val TAB_ROUTES = TABS.map { it.route }.toSet()
+
+private fun NavBackStackEntry?.isTab(): Boolean =
+    this?.destination?.route in TAB_ROUTES
 
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
@@ -100,7 +108,13 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            AnimatedVisibility(visible = showBar) {
+            // 整条栏用弹簧升降，而不是默认的「瞬间展开」——二级页面推入时
+            // 栏体下沉、内容上移是同一拍，观感才连贯。
+            AnimatedVisibility(
+                visible = showBar,
+                enter = Motion.barEnter(),
+                exit = Motion.barExit()
+            ) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 0.dp
@@ -149,7 +163,38 @@ private fun AppNavHost(
     speak: (String) -> Unit,
     speakAuto: (String) -> Unit
 ) {
-    NavHost(navController = nav, startDestination = Routes.HOME) {
+    NavHost(
+        navController = nav,
+        startDestination = Routes.HOME,
+        /*
+         * 转场策略：按「两个页面是不是同一层」二分，而不是给每个页面写死一套。
+         *
+         * - 两端都是底部标签 → 平行转场（淡入淡出 + 轻微缩放），不表达方向；
+         * - 只要有一端不是标签（二级页 / 学习页 / 单词详情）→ 层级推进，
+         *   新页从右侧滑入，旧页只左移 1/4 屏并缩小变暗，形成前后景视差。
+         *
+         * 之所以四条转场都判 `initialState.isTab() && targetState.isTab()`：
+         * 底部标签用 `popUpTo(HOME) + restoreState` 切换，从「我的」回「首页」
+         * 在 NavController 眼里是一次 **pop** 而不是 navigate，如果只按 navigate 判，
+         * 同一组标签之间来回切会一会儿滑、一会儿淡，方向感是乱的。
+         */
+        enterTransition = {
+            if (initialState.isTab() && targetState.isTab()) Motion.parallelEnter()
+            else Motion.pushEnter()
+        },
+        exitTransition = {
+            if (initialState.isTab() && targetState.isTab()) Motion.parallelExit()
+            else Motion.pushExit()
+        },
+        popEnterTransition = {
+            if (initialState.isTab() && targetState.isTab()) Motion.parallelEnter()
+            else Motion.popEnter()
+        },
+        popExitTransition = {
+            if (initialState.isTab() && targetState.isTab()) Motion.parallelExit()
+            else Motion.popExit()
+        }
+    ) {
 
         composable(Routes.HOME) {
             HomeScreen(

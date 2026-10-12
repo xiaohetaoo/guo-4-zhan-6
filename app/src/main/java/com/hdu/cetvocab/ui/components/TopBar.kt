@@ -2,6 +2,7 @@ package com.hdu.cetvocab.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,6 +27,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.hdu.cetvocab.R
+import com.hdu.cetvocab.ui.theme.springPress
 
 /** 二级页面统一顶栏（左返回 + 标题 + 右侧自定义） */
 @Composable
@@ -36,6 +39,7 @@ fun AppTopBar(
     trailing: @Composable (() -> Unit)? = null
 ) {
     val backLabel = stringResource(R.string.action_back)
+    val interaction = remember { MutableInteractionSource() }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -45,9 +49,15 @@ fun AppTopBar(
         Box(
             modifier = Modifier
                 .size(38.dp)
+                .springPress(interaction, pressedScale = 0.88f)
                 .clip(RoundedCornerShape(13.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(role = Role.Button, onClick = onBack)
+                .clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    role = Role.Button,
+                    onClick = onBack
+                )
                 // 返回图标是 Canvas 自绘、没有内置语义，必须显式给出朗读文本，
                 // 否则 TalkBack 只会念出一个无名的「按钮」。
                 .semantics { contentDescription = backLabel },

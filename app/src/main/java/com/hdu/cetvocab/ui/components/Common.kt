@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.data.AchievementDef
 import com.hdu.cetvocab.data.DayStat
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.springPress
 
 /** 统一的大圆角卡片 */
 @Composable
@@ -253,12 +256,20 @@ fun AchievementBadge(
     onClick: (() -> Unit)? = null
 ) {
     val tint = if (unlocked) tierColor(def.tier) else LocalAppColors.current.badgeLockedTint
+    // 徽章有按压回弹：点下去整枚缩到 94%，松手弹回，替代偏重的默认水波纹。
+    val interaction = remember { MutableInteractionSource() }
     Column(
         modifier = modifier
+            .springPress(interaction)
             .clip(RoundedCornerShape(18.dp))
             .background(if (unlocked) tint.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant)
             .then(
-                if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick)
+                if (onClick != null) Modifier.clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    role = Role.Button,
+                    onClick = onClick
+                )
                 else Modifier
             )
             .padding(horizontal = 10.dp, vertical = 14.dp),
@@ -305,11 +316,18 @@ fun MenuRow(
     accent: Color,
     onClick: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .springPress(interaction)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick
+            )
             .padding(horizontal = 10.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

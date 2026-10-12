@@ -3,6 +3,7 @@ package com.hdu.cetvocab.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.springPress
 
 /**
  * 喇叭按钮：纯 Canvas 绘制，不依赖图标字体或图片资源。
@@ -56,6 +59,7 @@ fun SpeakButton(
     label: String? = null
 ) {
     val speakLabel = label ?: stringResource(R.string.action_speak)
+    val interaction = remember { MutableInteractionSource() }
     val bg = if (filled) MaterialTheme.colorScheme.primary
     else MaterialTheme.colorScheme.primaryContainer
     val fg = if (filled) MaterialTheme.colorScheme.onPrimary
@@ -63,9 +67,15 @@ fun SpeakButton(
     Box(
         modifier = modifier
             .size(size)
+            .springPress(interaction, pressedScale = 0.86f)
             .clip(CircleShape)
             .background(bg)
-            .clickable(role = Role.Button, onClick = { onSpeak(text) })
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                role = Role.Button,
+                onClick = { onSpeak(text) }
+            )
             .semantics { contentDescription = speakLabel },
         contentAlignment = Alignment.Center
     ) {

@@ -1,9 +1,18 @@
 package com.hdu.cetvocab.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -77,6 +88,8 @@ import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.SpeakButton
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.Motion
+import com.hdu.cetvocab.ui.theme.springPress
 
 @Composable
 fun QuizScreen(
@@ -265,6 +278,7 @@ private fun QuizPicker(
             items(letters, key = { it.letter }) { item ->
                 // 选义题需要 4 个不同选项，词数不足的字母（如 X）无法出题，置灰不可点
                 val usable = item.total >= 4
+                val cellInteraction = remember { MutableInteractionSource() }
                 val accent = when {
                     !usable -> MaterialTheme.colorScheme.onSurfaceVariant
                     item.done -> LocalAppColors.current.success
@@ -272,6 +286,7 @@ private fun QuizPicker(
                 }
                 Column(
                     modifier = Modifier
+                        .springPress(cellInteraction)
                         .clip(RoundedCornerShape(18.dp))
                         .background(
                             when {
@@ -285,7 +300,11 @@ private fun QuizPicker(
                             MaterialTheme.colorScheme.outlineVariant,
                             RoundedCornerShape(18.dp)
                         )
-                        .clickable(enabled = usable) { onPick(item.letter) }
+                        .clickable(
+                            interactionSource = cellInteraction,
+                            indication = null,
+                            enabled = usable
+                        ) { onPick(item.letter) }
                         .padding(vertical = 14.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
@@ -353,6 +372,7 @@ private fun QuizPlay(
     val q = state.current ?: return
     val progress = if (state.total == 0) 0f else (state.index + 1).toFloat() / state.total
     val closeLabel = stringResource(R.string.action_close)
+    val closeInteraction = remember { MutableInteractionSource() }
 
     // 拼写题出题时自动朗读。
     // 此前这里直接调 onSpeak，绕过了「自动朗读」开关 —— 用户在设置里关掉后，
@@ -367,9 +387,15 @@ private fun QuizPlay(
                 Box(
                     modifier = Modifier
                         .size(34.dp)
+                        .springPress(closeInteraction, pressedScale = 0.88f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable(role = Role.Button, onClick = onQuit)
+                        .clickable(
+                            interactionSource = closeInteraction,
+                            indication = null,
+                            role = Role.Button,
+                            onClick = onQuit
+                        )
                         .semantics { contentDescription = closeLabel },
                     contentAlignment = Alignment.Center
                 ) {
@@ -425,16 +451,45 @@ private fun QuizPlay(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
-            when (q.kind) {
-                QuizKind.SPELLING -> SpellingQuestion(q, state, vm, onSpeak)
-                QuizKind.TRANSLATION -> TranslationQuestion(q, state, vm)
-                QuizKind.CONFUSABLE -> ConfusableQuestion(q, state, vm)
-                else -> ChoiceQuestion(q, state, vm, onSpeak)
+            /*
+             * 每换一题，题干从右侧滑入 + 淡入。
+             *
+             * 这里用 `key(index)` 重建整棵子树，而不是 AnimatedContent：
+             * AnimatedContent 在退场动画期间还会渲染「上一题」，但它读的是实时 state
+             * （此时已经是新题的选中项与揭晓态），旧题的选项会串成新题的样子。
+             * key 直接把旧子树丢掉，没有这个隐患，代价是少了退场动画——
+             * 但题干是「一题接一题」的流，入场足够。
+             */
+            key(state.index) {
+                val enter = remember { Animatable(0f) }
+                LaunchedEffect(Unit) { enter.animateTo(1f, Motion.spatial()) }
+                Column(
+                    modifier = Modifier.graphicsLayer {
+                        // 弹簧会过冲，alpha 必须夹住；位移过冲则是我们要的「滑过一点再回」。
+                        alpha = enter.value.coerceIn(0f, 1f)
+                        translationX = (1f - enter.value) * 40.dp.toPx()
+                    }
+                ) {
+                    when (q.kind) {
+                        QuizKind.SPELLING -> SpellingQuestion(q, state, vm, onSpeak)
+                        QuizKind.TRANSLATION -> TranslationQuestion(q, state, vm)
+                        QuizKind.CONFUSABLE -> ConfusableQuestion(q, state, vm)
+                        else -> ChoiceQuestion(q, state, vm, onSpeak)
+                    }
+                }
             }
 
-            if (state.revealed) {
-                Spacer(Modifier.height(14.dp))
-                AppCard(
+            // 解析卡从「瞬时出现」改为向下展开 + 淡入，像把卡片翻开来。
+            AnimatedVisibility(
+                visible = state.revealed,
+                enter = fadeIn(Motion.effects()) + expandVertically(Motion.spatial()) { it },
+                exit = fadeOut(Motion.effects()) + shrinkVertically(Motion.spatial())
+            ) {
+                // AnimatedVisibility 的插槽按单子项布局，直接塞两个子项会叠在一起，
+                // 这里显式套一层 Column，让「间距 + 解析卡」正常纵向排列。
+                Column {
+                    Spacer(Modifier.height(14.dp))
+                    AppCard(
                     color = if (isCorrect(state, q))
                         LocalAppColors.current.cardMint else LocalAppColors.current.cardPeach,
                     padding = 16.dp
@@ -567,6 +622,7 @@ private fun QuizPlay(
                             )
                         }
                     }
+                    }
                 }
             }
             Spacer(Modifier.height(20.dp))
@@ -688,22 +744,45 @@ private fun OptionRow(
     revealed: Boolean,
     onClick: () -> Unit
 ) {
-    val container = when {
-        revealed && isAnswer -> LocalAppColors.current.success.copy(alpha = 0.16f)
-        revealed && selected -> LocalAppColors.current.danger.copy(alpha = 0.14f)
-        selected -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    val content = when {
-        revealed && isAnswer -> LocalAppColors.current.success
-        revealed && selected -> LocalAppColors.current.danger
-        selected -> MaterialTheme.colorScheme.onPrimaryContainer
-        else -> MaterialTheme.colorScheme.onSurface
-    }
+    // 配色从「瞬间跳变」改成弹簧过渡：选中、判对、判错三种状态的切换
+    // 都发生在手指抬起的那一帧，硬切换是最刺眼的「生硬」。
+    val container by animateColorAsState(
+        targetValue = when {
+            revealed && isAnswer -> LocalAppColors.current.success.copy(alpha = 0.16f)
+            revealed && selected -> LocalAppColors.current.danger.copy(alpha = 0.14f)
+            selected -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        },
+        animationSpec = Motion.effects(),
+        label = "optionContainer"
+    )
+    val content by animateColorAsState(
+        targetValue = when {
+            revealed && isAnswer -> LocalAppColors.current.success
+            revealed && selected -> LocalAppColors.current.danger
+            selected -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.onSurface
+        },
+        animationSpec = Motion.effects(),
+        label = "optionContent"
+    )
+    // 选中时轻微放大，给一个「拿起来」的手感；幅度控制在 2%，
+    // 大了会挤压相邻行。
+    val scale by animateFloatAsState(
+        targetValue = if (selected && !revealed) 1.02f else 1f,
+        animationSpec = Motion.spatialSnappy(),
+        label = "optionScale"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 5.dp)
+            // 放在 padding 之后：缩放只作用于行内容，行占位高度不变，
+            // 否则选中时整列选项会跟着上下抖动。
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(16.dp))
             .background(container)
             // 这一行此前只是「可点击」，TalkBack 读不出来是第几个选项、有没有选中。
@@ -870,22 +949,39 @@ private fun MultiOptionRow(
     revealed: Boolean,
     onClick: () -> Unit
 ) {
-    val container = when {
-        revealed && isAnswer -> LocalAppColors.current.success.copy(alpha = 0.16f)
-        revealed && checked -> LocalAppColors.current.danger.copy(alpha = 0.14f)
-        checked -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    val content = when {
-        revealed && isAnswer -> LocalAppColors.current.success
-        revealed && checked -> LocalAppColors.current.danger
-        checked -> MaterialTheme.colorScheme.onPrimaryContainer
-        else -> MaterialTheme.colorScheme.onSurface
-    }
+    val container by animateColorAsState(
+        targetValue = when {
+            revealed && isAnswer -> LocalAppColors.current.success.copy(alpha = 0.16f)
+            revealed && checked -> LocalAppColors.current.danger.copy(alpha = 0.14f)
+            checked -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        },
+        animationSpec = Motion.effects(),
+        label = "multiContainer"
+    )
+    val content by animateColorAsState(
+        targetValue = when {
+            revealed && isAnswer -> LocalAppColors.current.success
+            revealed && checked -> LocalAppColors.current.danger
+            checked -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.onSurface
+        },
+        animationSpec = Motion.effects(),
+        label = "multiContent"
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (checked && !revealed) 1.02f else 1f,
+        animationSpec = Motion.spatialSnappy(),
+        label = "multiScale"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 5.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(RoundedCornerShape(16.dp))
             .background(container)
             // 同 OptionRow：多选行需要 Checkbox 角色，读屏才能播报「已勾选 / 未勾选」
@@ -904,8 +1000,12 @@ private fun MultiOptionRow(
                 .size(22.dp)
                 .clip(RoundedCornerShape(7.dp))
                 .background(
-                    if (checked) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surface
+                    animateColorAsState(
+                        targetValue = if (checked) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surface,
+                        animationSpec = Motion.effects(),
+                        label = "multiBox"
+                    ).value
                 )
                 .border(
                     1.5.dp,
@@ -915,9 +1015,20 @@ private fun MultiOptionRow(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            // 勾从 0.6 倍弹到 1 倍，勾选动作才有「咔哒」的确认感
+            val checkScale by animateFloatAsState(
+                targetValue = if (checked) 1f else 0.6f,
+                animationSpec = Motion.spatialSnappy(),
+                label = "multiCheck"
+            )
             if (checked) {
                 IconCheck(
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier
+                        .size(14.dp)
+                        .graphicsLayer {
+                            scaleX = checkScale
+                            scaleY = checkScale
+                        },
                     color = MaterialTheme.colorScheme.onPrimary
                 )
             }

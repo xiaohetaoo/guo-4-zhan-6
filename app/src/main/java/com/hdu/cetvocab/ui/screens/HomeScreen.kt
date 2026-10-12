@@ -1,17 +1,20 @@
 package com.hdu.cetvocab.ui.screens
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,6 +52,7 @@ import com.hdu.cetvocab.ui.components.StatTile
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.components.WeekBarChart
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.Motion
 import kotlin.math.roundToInt
 
 @Composable
@@ -66,13 +70,16 @@ fun HomeScreen(
 
     // 四六级切换时整页重放一次「淡入 + 轻微上滑」。
     // 只认「级别真的变了」才播：首次进入首页、从别的 tab 切回来都不重放，避免无谓的闪动。
+    // 这里用弹簧而不是固定时长缓动：切换级别是个可以被打断的操作
+    // （用户可能在动画没走完时又点回四级），弹簧能自然接管而不是重新起播。
     val stageAnim = remember { Animatable(1f) }
     val seenStage = remember { mutableIntStateOf(state.stage) }
     LaunchedEffect(state.stage) {
         if (state.stage != seenStage.intValue) {
             seenStage.intValue = state.stage
             stageAnim.snapTo(0f)
-            stageAnim.animateTo(1f, tween(durationMillis = 320, easing = FastOutSlowInEasing))
+            // 透明度不能回弹（会闪），所以整段用临界阻尼弹簧，只求收束干脆。
+            stageAnim.animateTo(1f, Motion.effects())
         }
     }
 
@@ -240,37 +247,82 @@ fun HomeScreen(
     }
 }
 
+/**
+ * 四六级分段控件。
+ *
+ * 原实现是「选中项瞬间换底色」——手指抬起的同一帧颜色就跳过去了，
+ * 没有任何过渡，这是最典型的「生硬」。改成一条**弹簧滑动的指示器**：
+ * 底色块在两级之间滑过去，文字颜色同步做颜色过渡。
+ *
+ * 注意两个子项用**固定宽度**而不是 `weight(1f)`：Row 在未限定宽度时，
+ * 带权重的子项会吃掉父级给的全部可用宽度，整个控件会被拉成满屏宽，
+ * 把同一行左侧的问候语挤成 0 宽（实测过，问候语直接消失）。
+ * 这里两级标签都是两字，固定 52dp 一格，跟随字号放大也放得下。
+ */
 @Composable
 private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
-    Row(
+    val items = listOf(WordDb.STAGE_CET4 to "四级", WordDb.STAGE_CET6 to "六级")
+    val selectedIndex = items.indexOfFirst { it.first == stage }.coerceAtLeast(0)
+    val position by animateFloatAsState(
+        targetValue = selectedIndex.toFloat(),
+        animationSpec = Motion.spatialSnappy(),
+        label = "stagePill"
+    )
+    // 两个子项共用同一个交互源：只为了把水波纹关掉（滑动的色块本身就是反馈，
+    // 再叠一层波纹会显脏），不参与按压缩放。
+    val interaction = remember { MutableInteractionSource() }
+    val itemWidth = 52.dp
+
+    Box(
         modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(3.dp)
     ) {
-        listOf(WordDb.STAGE_CET4 to "四级", WordDb.STAGE_CET6 to "六级").forEach { (s, label) ->
-            val selected = s == stage
+        // 指示器层：与内容层一样内缩 3dp。
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(3.dp)
+        ) {
             Box(
                 modifier = Modifier
+                    .offset(x = itemWidth * position)
+                    .width(itemWidth)
+                    .fillMaxHeight()
                     .clip(RoundedCornerShape(13.dp))
-                    .background(
-                        if (selected) MaterialTheme.colorScheme.primary
-                        else androidx.compose.ui.graphics.Color.Transparent
-                    )
-                    .selectable(
-                        selected = selected,
-                        role = Role.Tab,
-                        onClick = { if (!selected) onSelect(s) }
-                    )
-                    .padding(horizontal = 14.dp, vertical = 7.dp)
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+        }
+        Row(modifier = Modifier.padding(3.dp)) {
+            items.forEach { (s, label) ->
+                val selected = s == stage
+                val textColor by animateColorAsState(
+                    targetValue = if (selected) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = Motion.effects(),
+                    label = "stageText"
                 )
+                Box(
+                    modifier = Modifier
+                        .width(itemWidth)
+                        .clip(RoundedCornerShape(13.dp))
+                        .selectable(
+                            selected = selected,
+                            role = Role.Tab,
+                            interactionSource = interaction,
+                            indication = null,
+                            onClick = { if (!selected) onSelect(s) }
+                        )
+                        .padding(vertical = 7.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        color = textColor
+                    )
+                }
             }
         }
     }

@@ -1,9 +1,15 @@
 package com.hdu.cetvocab.ui.screens
 
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,10 +36,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -60,6 +69,9 @@ import com.hdu.cetvocab.ui.components.SpeakButton
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.components.WordHeadline
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.Motion
+import com.hdu.cetvocab.ui.theme.springPress
+import kotlin.math.abs
 
 @Composable
 fun StudyScreen(
@@ -70,6 +82,7 @@ fun StudyScreen(
 ) {
     val state by vm.study.collectAsState()
     val closeLabel = stringResource(R.string.action_close)
+    val closeInteraction = remember { MutableInteractionSource() }
 
     // 学习时长只累计「本页在前台」的时间，具体计时由 ViewModel 维护：
     // 它同时知道应用是否退到了后台，能把切出去的那段时间排除掉。
@@ -113,9 +126,15 @@ fun StudyScreen(
                 Box(
                     modifier = Modifier
                         .size(34.dp)
+                        .springPress(closeInteraction, pressedScale = 0.88f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable(role = Role.Button, onClick = onFinish)
+                        .clickable(
+                            interactionSource = closeInteraction,
+                            indication = null,
+                            role = Role.Button,
+                            onClick = onFinish
+                        )
                         .semantics { contentDescription = closeLabel },
                     contentAlignment = Alignment.Center
                 ) {
@@ -172,12 +191,47 @@ fun StudyScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
         ) {
-            Crossfade(
-                targetState = state.flipped,
-                animationSpec = tween(260),
-                label = "card"
-            ) { flipped ->
-                if (!flipped) {
+            /*
+             * 翻卡用「绕 Y 轴真翻转」，不用 Crossfade。
+             *
+             * Crossfade 是正反两面同时淡入淡出，中途两张卡各半透明地叠在一起——
+             * 既不像翻卡，又会因为两面高度不同而在叠合瞬间抖动。
+             *
+             * 这里让角度从 0° 连续走到 180°：
+             *   0°～90°   显示正面，rotationY = -角度（正面往外转）
+             *   90°～180° 显示背面，rotationY = 180 - 角度（背面从侧立转正）
+             * 两面在 90° 处都是「侧立」状态（投影宽度为 0），所以换面的那一帧
+             * 用户看不到任何跳变，不需要额外的淡入淡出来遮。
+             */
+            val flipAngle = remember { Animatable(0f) }
+            var lastIndex by remember { mutableIntStateOf(state.index) }
+            LaunchedEffect(state.index, state.flipped) {
+                if (state.index != lastIndex) {
+                    // 换词一定回到正面，而且直接落位、不播翻卡——
+                    // 否则每答一题都要先「翻回来」再显示下一个词，白等 200 多毫秒。
+                    lastIndex = state.index
+                    flipAngle.snapTo(0f)
+                } else {
+                    flipAngle.animateTo(if (state.flipped) 180f else 0f, Motion.flip())
+                }
+            }
+            // 侧立时轻微缩一下，模拟卡片被捏起来翻过去，落位时再回到原尺寸。
+            val edge = (1f - abs(flipAngle.value - 90f) / 90f).coerceIn(0f, 1f)
+            val dip = 1f - 0.04f * edge
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        rotationY = if (flipAngle.value <= 90f) -flipAngle.value
+                        else 180f - flipAngle.value
+                        // 不设相机距离的话，绕 Y 轴旋转会退化成「横向压扁」，毫无立体感。
+                        // 14 × 像素密度是手机屏幕上比较自然的透视强度。
+                        cameraDistance = 14f * density
+                        scaleX = dip
+                        scaleY = dip
+                    }
+            ) {
+                if (flipAngle.value <= 90f) {
                     CardFront(
                         word = word,
                         speak = speak,
@@ -185,43 +239,60 @@ fun StudyScreen(
                         fav = state.favIds.contains(word.id),
                         level = state.currentLevel
                     )
-                } else CardBack(word, speak)
+                } else {
+                    CardBack(word, speak)
+                }
             }
         }
 
         // ---------- 底部操作 ----------
         Column(modifier = Modifier.padding(16.dp)) {
-            if (!state.flipped) {
-                Button(
-                    onClick = { vm.flipCard() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text(stringResource(R.string.study_reveal), fontWeight = FontWeight.SemiBold)
-                }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(
-                        onClick = { vm.answerCurrent(known = false) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = LocalAppColors.current.danger)
-                    ) {
-                        Text(stringResource(R.string.study_unknown), fontWeight = FontWeight.SemiBold)
-                    }
+            // 「查看释义」与「认识 / 待加强」两组按钮的切换也走弹簧：
+            // 原先是一帧之内直接换掉，跟上面翻卡的动画节奏完全脱节。
+            AnimatedContent(
+                targetState = state.flipped,
+                transitionSpec = {
+                    (fadeIn(Motion.effects()) +
+                        slideInVertically(Motion.spatialSnappy()) { it / 3 })
+                        .togetherWith(
+                            fadeOut(Motion.effects()) +
+                                slideOutVertically(Motion.spatialSnappy()) { -it / 3 }
+                        )
+                },
+                label = "studyActions"
+            ) { flipped ->
+                if (!flipped) {
                     Button(
-                        onClick = { vm.answerCurrent(known = true) },
+                        onClick = { vm.flipCard() },
                         modifier = Modifier
-                            .weight(1f)
+                            .fillMaxWidth()
                             .height(52.dp),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = LocalAppColors.current.success)
+                        shape = RoundedCornerShape(18.dp)
                     ) {
-                        Text(stringResource(R.string.study_known), fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.study_reveal), fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedButton(
+                            onClick = { vm.answerCurrent(known = false) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = LocalAppColors.current.danger)
+                        ) {
+                            Text(stringResource(R.string.study_unknown), fontWeight = FontWeight.SemiBold)
+                        }
+                        Button(
+                            onClick = { vm.answerCurrent(known = true) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = LocalAppColors.current.success)
+                        ) {
+                            Text(stringResource(R.string.study_known), fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
@@ -248,6 +319,7 @@ private fun CardFront(
     val favLabel = stringResource(
         if (fav) R.string.cd_fav_remove else R.string.cd_fav_add
     )
+    val favInteraction = remember { MutableInteractionSource() }
     AppCard(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.surface,
@@ -259,11 +331,17 @@ private fun CardFront(
             Box(
                 modifier = Modifier
                     .size(38.dp)
+                    .springPress(favInteraction, pressedScale = 0.86f)
                     .clip(RoundedCornerShape(13.dp))
                     .background(
                         if (fav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant
                     )
-                    .clickable(role = Role.Button, onClick = { vm.toggleFavCurrent() })
+                    .clickable(
+                        interactionSource = favInteraction,
+                        indication = null,
+                        role = Role.Button,
+                        onClick = { vm.toggleFavCurrent() }
+                    )
                     .semantics { contentDescription = favLabel },
                 contentAlignment = Alignment.Center
             ) {
@@ -423,9 +501,20 @@ private fun StudySummary(
 ) {
     val total = known + unknown
     val rate = if (total == 0) 0 else known * 100 / total
+    // 结算页此前是「学完最后一题瞬间硬切」，没有任何过渡。
+    // 这里给它一个「从 92% 弹到 100% + 淡入」的入场，收束感更完整。
+    val enter = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { enter.animateTo(1f, Motion.spatial()) }
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .graphicsLayer {
+                // 弹簧会轻微过冲，alpha 必须夹回 1，否则会触发一次无谓的亮度跳变。
+                alpha = enter.value.coerceIn(0f, 1f)
+                val s = 0.92f + 0.08f * enter.value
+                scaleX = s
+                scaleY = s
+            }
             .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
