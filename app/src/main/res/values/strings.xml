@@ -49,6 +49,7 @@
     <string name="hint_input_word">输入英文单词</string>
     <string name="action_play_again">再来一局</string>
     <string name="action_view_leaderboard">查看排行榜</string>
+    <string name="leaderboard_entry_desc">查看每一次闯关的得分与排名</string>
 
     <!-- 设置 / 数据管理 -->
     <string name="reset_confirm_title">确认清空全部数据？</string>

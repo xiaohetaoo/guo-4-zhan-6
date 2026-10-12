@@ -448,6 +448,35 @@ class VocabRepository(context: Context) {
             tryUnlock(Achievements.QUIZ_PERFECT, it.total > 0 && it.correct == it.total)
             tryUnlock(Achievements.QUIZ_COMBO_10, it.maxCombo >= 10)
             tryUnlock(Achievements.QUIZ_SCORE_300, it.score >= 300)
+
+            // 专题关卡成就：只在对应的专题结算时才去查表，
+            // 避免普通单元 / 首字母闯关也白白多跑几次 COUNT 查询。
+            when (it.unit) {
+                QUIZ_SCOPE_CONFUSABLE -> {
+                    tryUnlock(Achievements.CONFUSABLE_FIRST, it.total > 0)
+                    tryUnlock(
+                        Achievements.CONFUSABLE_PERFECT_5,
+                        userDb.quizPerfectCountOfUnit(QUIZ_SCOPE_CONFUSABLE) >= 5
+                    )
+                }
+                QUIZ_SCOPE_TRANSLATION -> {
+                    tryUnlock(Achievements.TRANSLATION_FIRST, it.total > 0)
+                    tryUnlock(
+                        Achievements.TRANSLATION_PERFECT_5,
+                        userDb.quizPerfectCountOfUnit(QUIZ_SCOPE_TRANSLATION) >= 5
+                    )
+                }
+                else -> {
+                    // 专题成就按关卡类型判断，普通闯关不触发；
+                    // 但「三关通吃」可能在任一关卡结算时凑齐，因此放到外面统一判一次。
+                }
+            }
+            tryUnlock(
+                Achievements.TOPIC_SWEEP,
+                userDb.quizPlayedUnits(
+                    listOf(QUIZ_SCOPE_ALL, QUIZ_SCOPE_CONFUSABLE, QUIZ_SCOPE_TRANSLATION)
+                ).size == 3
+            )
         }
         return gained
     }

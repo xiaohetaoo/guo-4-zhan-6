@@ -297,6 +297,44 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
             if (it.moveToFirst()) it.getInt(0) else 0
         }
 
+    /** 某一专题关卡（按 unit 范围值）的完成次数 */
+    fun quizCountOfUnit(unit: Int): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM quiz_record WHERE unit=?",
+            arrayOf(unit.toString())
+        ).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+
+    /**
+     * 某一专题关卡「全对通关」的次数。
+     *
+     * `total > 0` 不能省：题库异常时可能写入 total=0 的记录，
+     * 那样 correct=total=0 会被当成一次全对，成就白送。
+     */
+    fun quizPerfectCountOfUnit(unit: Int): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM quiz_record WHERE unit=? AND total>0 AND correct=total",
+            arrayOf(unit.toString())
+        ).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+
+    /** 打过哪些专题关卡（返回出现过的 unit 范围值集合） */
+    fun quizPlayedUnits(units: Collection<Int>): Set<Int> {
+        if (units.isEmpty()) return emptySet()
+        val placeholders = units.joinToString(",") { "?" }
+        val args = units.map { it.toString() }.toTypedArray()
+        val found = HashSet<Int>()
+        readableDatabase.rawQuery(
+            "SELECT DISTINCT unit FROM quiz_record WHERE unit IN ($placeholders)",
+            args
+        ).use { c ->
+            while (c.moveToNext()) found.add(c.getInt(0))
+        }
+        return found
+    }
+
     fun quizTotalMs(): Long =
         readableDatabase.rawQuery("SELECT SUM(duration_ms) FROM quiz_record", null).use {
             if (it.moveToFirst()) it.getLong(0) else 0L

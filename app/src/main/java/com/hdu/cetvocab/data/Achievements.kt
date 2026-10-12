@@ -22,6 +22,12 @@ object Achievements {
     const val GOAL_DONE = "goal_done"
     const val NIGHT_OWL = "night_owl"
     const val EARLY_BIRD = "early_bird"
+    // ---- 专题关卡成就（易混词辨析 / 真题句子翻译）----
+    const val CONFUSABLE_FIRST = "confusable_first"
+    const val TRANSLATION_FIRST = "translation_first"
+    const val CONFUSABLE_PERFECT_5 = "confusable_perfect_5"
+    const val TRANSLATION_PERFECT_5 = "translation_perfect_5"
+    const val TOPIC_SWEEP = "topic_sweep"
 
     val ALL: List<AchievementDef> = listOf(
         AchievementDef(FIRST_STEP, "启程", "学习第一个单词", "seed", 1),
@@ -44,7 +50,14 @@ object Achievements {
         AchievementDef(FAV_20, "生词收藏家", "收藏 20 个生词", "star", 1),
         AchievementDef(GOAL_DONE, "今日达标", "完成一次每日学习目标", "check", 1),
         AchievementDef(NIGHT_OWL, "夜猫子", "在 22:00 之后学习", "moon", 1),
-        AchievementDef(EARLY_BIRD, "早起鸟", "在 7:00 之前学习", "sun", 1)
+        AchievementDef(EARLY_BIRD, "早起鸟", "在 7:00 之前学习", "sun", 1),
+        // 专题关卡：先给「第一次完成」的低门槛成就做引导，
+        // 再用「累计 5 次全对」做长期目标，最后用一个跨专题的收尾成就串起来。
+        AchievementDef(CONFUSABLE_FIRST, "明辨秋毫", "完成一次易混词辨析闯关", "eye", 1),
+        AchievementDef(TRANSLATION_FIRST, "初译登场", "完成一次真题句子翻译闯关", "pen", 1),
+        AchievementDef(CONFUSABLE_PERFECT_5, "火眼金睛", "易混词辨析累计 5 次全对", "eye", 2),
+        AchievementDef(TRANSLATION_PERFECT_5, "译海拾贝", "真题句子翻译累计 5 次全对", "pen", 2),
+        AchievementDef(TOPIC_SWEEP, "三关通吃", "全词挑战、辨析、翻译各完成一次", "gate", 3)
     )
 
     fun def(code: String): AchievementDef? = ALL.firstOrNull { it.code == code }

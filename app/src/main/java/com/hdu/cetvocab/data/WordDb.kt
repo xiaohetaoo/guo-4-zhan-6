@@ -219,8 +219,16 @@ class WordDb(private val context: Context) {
 
     companion object {
         const val DB_NAME = "words.db"
-        /** v5：新增 translation_quiz（真题句子翻译题库） */
-        const val DB_VERSION = 5
+        /**
+         * v5：新增 translation_quiz（真题句子翻译题库）
+         * v6：translation_quiz 扩充至 322 条（四级 161 / 六级 161）
+         *
+         * 这个号不是 SQLite 的 user_version，而是「已安装到私有目录的词库版本号」：
+         * 与 [open] 里记录在 SharedPreferences 的值不一致时才重新从 assets 复制。
+         * 因此只要内置词库内容有变（增删改题目），这里就必须 +1，
+         * 否则老用户升级后仍用着设备上的旧副本，看不到新题。
+         */
+        const val DB_VERSION = 6
         const val STAGE_CET4 = 1
         const val STAGE_CET6 = 2
 

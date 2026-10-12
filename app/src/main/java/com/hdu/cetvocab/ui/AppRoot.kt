@@ -183,9 +183,13 @@ private fun AppNavHost(
         composable(Routes.QUIZ) {
             QuizScreen(
                 vm = vm,
-                onExit = { nav.navigate(Routes.LEADERBOARD) },
+                // 退出闯关 = 离开闯关页回到上一个标签页。
+                // 原先这里写的是「跳到排行榜」：一局打完点「返回」会被强行带到排行榜，
+                // 而排行榜另有入口（闯关页内的入口 + 结算页按钮），属于重复跳转。
+                onExit = { nav.popBackStack() },
                 onSpeak = speak,
-                onSpeakAuto = speakAuto
+                onSpeakAuto = speakAuto,
+                onOpenLeaderboard = { nav.navigate(Routes.LEADERBOARD) }
             )
         }
 
@@ -193,7 +197,6 @@ private fun AppNavHost(
             ProfileScreen(
                 vm = vm,
                 onOpenAchievements = { nav.navigate(Routes.ACHIEVEMENTS) },
-                onOpenLeaderboard = { nav.navigate(Routes.LEADERBOARD) },
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) }
             )
         }

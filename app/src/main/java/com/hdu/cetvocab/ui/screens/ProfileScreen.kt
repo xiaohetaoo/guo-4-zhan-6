@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,7 +60,6 @@ import kotlin.math.sin
 fun ProfileScreen(
     vm: AppViewModel,
     onOpenAchievements: () -> Unit,
-    onOpenLeaderboard: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val state by vm.profile.collectAsState()
@@ -234,19 +232,9 @@ fun ProfileScreen(
         }
 
         // ---------- 入口 ----------
-        // 「成就墙」不再单列：上方成就卡右上角的「全部 ›」已是同一入口，避免重复。
-        item {
-            AppCard {
-                MenuRow("历次成绩排行榜", "查看每一次闯关的得分与排名", LocalAppColors.current.cardAmber, onOpenLeaderboard)
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 10.dp),
-                    thickness = 1.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
-                )
-                MenuRow("设置", "每日目标、发音、数据管理", LocalAppColors.current.cardSky, onOpenSettings)
-            }
-        }
-
+        // 「历次成绩排行榜」与「设置」两个入口都不再单列在「我的」页：
+        // 排行榜移到闯关页（成绩本就是在闯关里打出来的，放在这里要绕一次），
+        // 设置保留在页面右上角的齿轮图标。重复入口会让这一页越来越长。
         item {
             Text(
                 text = "本应用完全离线运行：词库、例句与助记内容全部内置，" +
@@ -376,49 +364,3 @@ private fun tierColor(tier: Tier): Color = when (tier) {
     Tier.KING -> Color(0xFFE2703A)
 }
 
-/**
- * 入口行。原先每行铺一块整宽彩色底，三行叠在一起视觉很重；
- * 改为「左侧小色点 + 文字 + 右侧箭头」的轻量行式，行高也随之收紧。
- */
-@Composable
-private fun MenuRow(
-    title: String,
-    subtitle: String,
-    accent: Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(accent)
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        IconChevronRight(
-            modifier = Modifier.size(16.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}

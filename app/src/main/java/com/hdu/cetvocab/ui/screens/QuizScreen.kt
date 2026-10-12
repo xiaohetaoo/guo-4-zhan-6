@@ -72,6 +72,7 @@ import com.hdu.cetvocab.ui.components.BulletRow
 import com.hdu.cetvocab.ui.components.IconCheck
 import com.hdu.cetvocab.ui.components.IconClose
 import com.hdu.cetvocab.ui.components.IconStar
+import com.hdu.cetvocab.ui.components.MenuRow
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.SpeakButton
 import com.hdu.cetvocab.ui.components.Tag
@@ -82,7 +83,10 @@ fun QuizScreen(
     vm: AppViewModel,
     onExit: () -> Unit,
     onSpeak: (String) -> Unit,
-    onSpeakAuto: (String) -> Unit
+    onSpeakAuto: (String) -> Unit,
+    // 排行榜入口随「闯关」页一起呈现：成绩本来就是在闯关里打出来的，
+    // 放在「我的」页要绕一次。这里从选关页与结算页都能直达。
+    onOpenLeaderboard: () -> Unit
 ) {
     val state by vm.quiz.collectAsState()
     val learn by vm.learn.collectAsState()
@@ -109,7 +113,7 @@ fun QuizScreen(
     when {
         state.finished -> QuizResult(
             state,
-            onExit,
+            onOpenLeaderboard = onOpenLeaderboard,
             onAgain = {
                 // 两个专题关卡有自己的出题逻辑，不能直接走 startQuiz(unit)，
                 // 否则会被当成「全词挑战」重新抽一遍选义/拼写题。
@@ -141,7 +145,8 @@ fun QuizScreen(
             onPick = { vm.startLetterQuiz(it) },
             onFullStage = { vm.startQuiz(QUIZ_SCOPE_ALL) },
             onConfusable = { vm.startConfusableQuiz() },
-            onTranslation = { vm.startTranslationQuiz() }
+            onTranslation = { vm.startTranslationQuiz() },
+            onOpenLeaderboard = onOpenLeaderboard
         )
     }
 
@@ -174,7 +179,8 @@ private fun QuizPicker(
     onPick: (Char) -> Unit,
     onFullStage: () -> Unit,
     onConfusable: () -> Unit,
-    onTranslation: () -> Unit
+    onTranslation: () -> Unit,
+    onOpenLeaderboard: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -231,6 +237,15 @@ private fun QuizPicker(
                 container = LocalAppColors.current.cardMint,
                 onClick = onTranslation
             )
+            Spacer(Modifier.height(10.dp))
+            AppCard(padding = 6.dp) {
+                MenuRow(
+                    title = "历次成绩排行榜",
+                    subtitle = stringResource(R.string.leaderboard_entry_desc),
+                    accent = LocalAppColors.current.cardAmber,
+                    onClick = onOpenLeaderboard
+                )
+            }
         }
         if (letters.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -992,7 +1007,7 @@ private fun SpellingQuestion(
 @Composable
 private fun QuizResult(
     state: com.hdu.cetvocab.ui.QuizUiState,
-    onExit: () -> Unit,
+    onOpenLeaderboard: () -> Unit,
     onAgain: () -> Unit,
     vm: AppViewModel
 ) {
@@ -1104,7 +1119,7 @@ private fun QuizResult(
         }
         Spacer(Modifier.height(10.dp))
         OutlinedButton(
-            onClick = { vm.exitQuiz(); onExit() },
+            onClick = { vm.exitQuiz(); onOpenLeaderboard() },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(50.dp),

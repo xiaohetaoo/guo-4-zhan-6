@@ -230,6 +230,10 @@ fun glyphChar(glyph: String): String = when (glyph) {
     "check" -> "达"
     "moon" -> "月"
     "sun" -> "日"
+    // 专题关卡徽章：辨析用「辨」、翻译用「笔译」的「译」、跨专题收尾用「关」
+    "eye" -> "辨"
+    "pen" -> "译"
+    "gate" -> "关"
     else -> "星"
 }
 
@@ -284,6 +288,55 @@ fun AchievementBadge(
             else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/**
+ * 通用入口行：左侧小色点 + 标题 / 副标题 + 右侧箭头。
+ *
+ * 原来这是「我的」页内部的私有实现，排行榜入口搬到闯关页后两处都要用，
+ * 因此提到公共组件里，保证两页的行高、圆角、箭头尺寸完全一致。
+ */
+@Composable
+fun MenuRow(
+    title: String,
+    subtitle: String,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(accent)
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        IconChevronRight(
+            modifier = Modifier.size(16.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
