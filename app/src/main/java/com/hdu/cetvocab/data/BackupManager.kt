@@ -200,6 +200,7 @@ class BackupManager(
                 // 用户换机恢复后会发现主题和桌面图标回到了默认值。
                 put("icon_style", prefs.getInt(KEY_ICON_STYLE, LauncherIcons.STYLE_DEFAULT))
                 put("theme_mode", prefs.getInt(KEY_THEME, VocabRepository.THEME_SYSTEM))
+                put("animations_enabled", prefs.getBoolean(KEY_ANIM, true))
             }
         )
         file.writeText(root.toString(2))
@@ -360,6 +361,9 @@ class BackupManager(
                 if (p.has(KEY_THEME)) {
                     putInt(KEY_THEME, p.optInt(KEY_THEME, VocabRepository.THEME_SYSTEM))
                 }
+                if (p.has(KEY_ANIM)) {
+                    putBoolean(KEY_ANIM, p.optBoolean(KEY_ANIM, true))
+                }
             }.commit()
         }
 
@@ -407,5 +411,6 @@ class BackupManager(
         private const val KEY_UNIT = "current_unit"
         private const val KEY_ICON_STYLE = "icon_style"
         private const val KEY_THEME = "theme_mode"
+        private const val KEY_ANIM = "animations_enabled"
     }
 }

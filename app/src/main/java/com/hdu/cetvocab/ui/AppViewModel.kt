@@ -19,6 +19,7 @@ import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.data.quizLetterOfScope
 import com.hdu.cetvocab.data.quizScopeOfLetter
+import com.hdu.cetvocab.ui.theme.Motion
 import com.hdu.cetvocab.util.LauncherIcons
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -151,6 +152,8 @@ data class ProfileUiState(
     val stage: Int = WordDb.STAGE_CET4,
     val iconStyle: Int = LauncherIcons.STYLE_DEFAULT,
     val themeMode: Int = VocabRepository.THEME_SYSTEM,
+    /** 界面动效开关（设置页）。false 时转场、弹簧与按压回弹全部退化为瞬间落位。 */
+    val animationsEnabled: Boolean = true,
     val leaderboard: List<QuizRecord> = emptyList(),
     /**
      * 排行榜顶部统计的聚合口径（次数 / 最高分 / 平均分 / 最高正确率）。
@@ -167,6 +170,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 数据导出与备份/恢复（文件写入应用外部私有目录，无需存储权限） */
     val backup: BackupManager by lazy { BackupManager(getApplication(), repo.userDb, repo.wordDb) }
+
+    init {
+        // 动效开关要在首帧之前就同步给动效系统：Motion 的默认值是「开」，
+        // 若等 refreshAll() 落地，上次关闭了动效的用户在重启后会看到几帧动画。
+        Motion.applyAnimationsEnabled(repo.animationsEnabled)
+    }
 
     private val _home = MutableStateFlow(HomeUiState())
     val home: StateFlow<HomeUiState> = _home.asStateFlow()
@@ -319,6 +328,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _profile.update { it.copy(speechRate = rate) }
     }
 
+    /**
+     * 切换界面动效。
+     *
+     * 两步都不能省：写偏好只保证下次启动还生效，同步给 [Motion] 才能让**当前这次**
+     * 立刻生效 —— 否则用户要重开应用才看到效果，会被当成开关坏了。
+     */
+    fun setAnimationsEnabled(enabled: Boolean) {
+        repo.animationsEnabled = enabled
+        Motion.applyAnimationsEnabled(enabled)
+        _profile.update { it.copy(animationsEnabled = enabled) }
+    }
+
     fun resetAll() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { repo.resetAll() }
@@ -336,6 +357,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshAll() {
+        // 备份恢复 / 清空数据都会改到动效开关，这里统一再同步一次。
+        Motion.applyAnimationsEnabled(repo.animationsEnabled)
         refreshHome()
         refreshLearn()
         refreshProfile()
@@ -1031,6 +1054,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     stage = repo.stage,
                     iconStyle = repo.iconStyle,
                     themeMode = repo.themeMode,
+                    animationsEnabled = repo.animationsEnabled,
                     leaderboard = repo.userDb.quizRecords(50),
                     aggregate = repo.userDb.quizAggregate()
                 )

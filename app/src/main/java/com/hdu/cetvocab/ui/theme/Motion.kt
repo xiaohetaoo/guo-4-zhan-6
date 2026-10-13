@@ -5,6 +5,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,6 +19,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 
@@ -41,6 +44,26 @@ import androidx.compose.ui.graphics.graphicsLayer
  */
 object Motion {
 
+    // ---------------------------------------------------------------- 开关
+
+    /**
+     * 全局动效开关（设置页「界面动效」，持久化在 SharedPreferences）。
+     *
+     * 用 `mutableStateOf` 而不是普通 `var`：所有弹簧工厂和转场助手都是在**组合过程中**
+     * 被读取的，只有让快照系统观察它，开关一变全应用才能在同一次重组里改用新参数。
+     * 普通 var 要等下一次无关重组才生效，表现为「开关切了、切页还是老动画」。
+     *
+     * 关闭后：弹簧退化为 `snap()`（瞬间跳到终值）、导航转场退化为 `None`、
+     * 按压回弹不再缩放 —— 也就是「所有界面变化都直接落位」。
+     */
+    var animationsEnabled: Boolean by mutableStateOf(true)
+        private set
+
+    /** 由 ViewModel 在启动与用户改动时调用，把持久化值同步进动效系统。 */
+    fun applyAnimationsEnabled(enabled: Boolean) {
+        animationsEnabled = enabled
+    }
+
     // ---------------------------------------------------------------- 弹簧
 
     /**
@@ -48,28 +71,32 @@ object Motion {
      * 用于页面转场、指示器滑动、展开收起等「位置会变」的动画。
      */
     fun <T> spatial(): FiniteAnimationSpec<T> =
-        spring(dampingRatio = 0.80f, stiffness = Spring.StiffnessMediumLow)
+        if (!animationsEnabled) snap()
+        else spring(dampingRatio = 0.80f, stiffness = Spring.StiffnessMediumLow)
 
     /**
      * 空间位移 / 尺寸：更快收束、回弹更小，用于小元件。
      * 按钮按压、标签指示器这类幅度很小的位移，用主弹簧会显得拖沓。
      */
     fun <T> spatialSnappy(): FiniteAnimationSpec<T> =
-        spring(dampingRatio = 0.90f, stiffness = Spring.StiffnessMedium)
+        if (!animationsEnabled) snap()
+        else spring(dampingRatio = 0.90f, stiffness = Spring.StiffnessMedium)
 
     /**
      * 透明度 / 颜色：不回弹。
      * 过冲会让淡入淡出出现「闪一下」，必须用临界阻尼。
      */
     fun <T> effects(): FiniteAnimationSpec<T> =
-        spring(dampingRatio = 1f, stiffness = Spring.StiffnessMedium)
+        if (!animationsEnabled) snap()
+        else spring(dampingRatio = 1f, stiffness = Spring.StiffnessMedium)
 
     /**
      * 翻卡等需要「一鼓作气走完、不回弹」的场合。
      * 阻尼比 1.0 保证不会转过头，刚度调高让节奏干脆。
      */
     fun <T> flip(): FiniteAnimationSpec<T> =
-        spring(dampingRatio = 1f, stiffness = 520f)
+        if (!animationsEnabled) snap()
+        else spring(dampingRatio = 1f, stiffness = 520f)
 
     // ---------------------------------------------------------------- 导航转场
 
@@ -80,11 +107,13 @@ object Motion {
      * 底部标签之间的切换已改用带方向的 [slideEnter]，本函数保留给其它平行场景。
      */
     fun parallelEnter(): EnterTransition =
-        fadeIn(effects()) + scaleIn(initialScale = 0.94f, animationSpec = spatial())
+        if (!animationsEnabled) EnterTransition.None
+        else fadeIn(effects()) + scaleIn(initialScale = 0.94f, animationSpec = spatial())
 
     /** 平行转场 · 退出：淡出 + 放大到 104%，与进入形成对称的「推拉」。 */
     fun parallelExit(): ExitTransition =
-        fadeOut(effects()) + scaleOut(targetScale = 1.04f, animationSpec = spatial())
+        if (!animationsEnabled) ExitTransition.None
+        else fadeOut(effects()) + scaleOut(targetScale = 1.04f, animationSpec = spatial())
 
     /**
      * 平行转场 · 带方向的左右滑动 · 进入。
@@ -99,12 +128,14 @@ object Motion {
      * @param forward true 表示目标在右侧（新页从右进），false 表示目标在左侧
      */
     fun slideEnter(forward: Boolean): EnterTransition =
-        slideInHorizontally(animationSpec = spatial()) { if (forward) it else -it } +
+        if (!animationsEnabled) EnterTransition.None
+        else slideInHorizontally(animationSpec = spatial()) { if (forward) it else -it } +
             fadeIn(effects())
 
     /** 平行转场 · 带方向的左右滑动 · 退出：旧页朝新页的反方向让位，两者同步平移。 */
     fun slideExit(forward: Boolean): ExitTransition =
-        slideOutHorizontally(animationSpec = spatial()) { if (forward) -it else it } +
+        if (!animationsEnabled) ExitTransition.None
+        else slideOutHorizontally(animationSpec = spatial()) { if (forward) -it else it } +
             fadeOut(effects())
 
     /**
@@ -112,7 +143,8 @@ object Motion {
      * 这是「往深处走一层」的标准表达。
      */
     fun pushEnter(): EnterTransition =
-        slideInHorizontally(animationSpec = spatial()) { it } + fadeIn(effects())
+        if (!animationsEnabled) EnterTransition.None
+        else slideInHorizontally(animationSpec = spatial()) { it } + fadeIn(effects())
 
     /**
      * 层级推进 · 旧页退让：向左只移动 1/4 屏 + 缩小到 92% + 淡出。
@@ -122,26 +154,31 @@ object Motion {
      * 两个页面速度一样，看起来就是「两张纸并排平移」，很平。
      */
     fun pushExit(): ExitTransition =
-        slideOutHorizontally(animationSpec = spatial()) { -it / 4 } +
+        if (!animationsEnabled) ExitTransition.None
+        else slideOutHorizontally(animationSpec = spatial()) { -it / 4 } +
             scaleOut(targetScale = 0.92f, animationSpec = spatial()) +
             fadeOut(effects())
 
     /** 返回 · 上一层归位：从左侧 -1/4 处滑回 + 从 92% 放大回 100%。即 [pushExit] 的逆过程。 */
     fun popEnter(): EnterTransition =
-        slideInHorizontally(animationSpec = spatial()) { -it / 4 } +
+        if (!animationsEnabled) EnterTransition.None
+        else slideInHorizontally(animationSpec = spatial()) { -it / 4 } +
             scaleIn(initialScale = 0.92f, animationSpec = spatial()) +
             fadeIn(effects())
 
     /** 返回 · 二级页退出：向右滑走 + 淡出。 */
     fun popExit(): ExitTransition =
-        slideOutHorizontally(animationSpec = spatial()) { it } + fadeOut(effects())
+        if (!animationsEnabled) ExitTransition.None
+        else slideOutHorizontally(animationSpec = spatial()) { it } + fadeOut(effects())
 
     /** 底部导航栏进出：整条栏从下方弹簧升起 / 落回。 */
     fun barEnter(): EnterTransition =
-        slideInVertically(animationSpec = spatial()) { it } + fadeIn(effects())
+        if (!animationsEnabled) EnterTransition.None
+        else slideInVertically(animationSpec = spatial()) { it } + fadeIn(effects())
 
     fun barExit(): ExitTransition =
-        slideOutVertically(animationSpec = spatial()) { it } + fadeOut(effects())
+        if (!animationsEnabled) ExitTransition.None
+        else slideOutVertically(animationSpec = spatial()) { it } + fadeOut(effects())
 }
 
 /**
@@ -163,7 +200,9 @@ fun Modifier.springPress(
 ): Modifier {
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) pressedScale else 1f,
+        // 动效关闭时目标恒为 1f：仍然保留 animateFloatAsState 的读取，
+        // 这样开关切换会触发重组，而不是要等一次无关重组才生效。
+        targetValue = if (pressed && Motion.animationsEnabled) pressedScale else 1f,
         animationSpec = Motion.spatialSnappy(),
         label = "springPress"
     )

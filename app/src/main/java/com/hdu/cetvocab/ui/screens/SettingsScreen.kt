@@ -221,6 +221,29 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             }
                         }
                     }
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "界面动效",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "关闭后页面切换、展开收起与按压反馈直接落位，不再播放过渡动画",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = state.animationsEnabled,
+                            onCheckedChange = { vm.setAnimationsEnabled(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                    }
                 }
             }
 

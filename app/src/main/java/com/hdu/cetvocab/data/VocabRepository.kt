@@ -80,6 +80,16 @@ class VocabRepository(context: Context) {
         get() = prefs.getInt(KEY_THEME, THEME_SYSTEM)
         set(value) = prefs.edit().putInt(KEY_THEME, value).apply()
 
+    /**
+     * 界面动效开关：true 为开启（默认），false 为关闭。
+     *
+     * 这里只负责持久化；真正让动效生效/失效要由调用方把这个值同步给
+     * `Motion.applyAnimationsEnabled()` —— 数据层不反向依赖 ui 包。
+     */
+    var animationsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_ANIM, true)
+        set(value) = prefs.edit().putBoolean(KEY_ANIM, value).apply()
+
     // ---------------- 掌握等级 ----------------
 
     /** 等级含义：0 未学 1 模糊 2 认识 3 熟悉 4 掌握 5 精通 */
@@ -420,6 +430,11 @@ class VocabRepository(context: Context) {
      * 性能注意：本方法在「每答一个单词」时都会被调用一次，因此这里
      * **只读一次 states 表**并把结果透传给 [overview]，
      * 否则单次调用就要扫两遍全表，学一组 50 个词会累积上百次全表扫描。
+     *
+     * 成就数量涨到 80+ 之后还有第二个性能坑：如果对每个成就都无条件调
+     * `userDb.unlock()`，每答一个单词就要跑 80 多次 INSERT。因此这里先取一次
+     * 已解锁集合 [unlocked]，[tryUnlock] 对已解锁的 code 直接返回，
+     * 真正落库的只有「尚未解锁且条件刚达成」的那零星几个（绝大多数调用是 0 次写入）。
      */
     fun evaluateAchievements(lastQuiz: QuizRecord? = null): List<AchievementDef> {
         val gained = ArrayList<AchievementDef>()
@@ -427,54 +442,135 @@ class VocabRepository(context: Context) {
         val ov = overview(preloadedStates = states)
         val favCount = states.count { it.value.fav }
         val hour = LocalTime.now().hour
+        val answered = ov.totalCorrect + ov.totalWrong
+        val unlocked = userDb.achievements().keys.toMutableSet()
 
         fun tryUnlock(code: String, condition: Boolean) {
+            if (code in unlocked) return
             if (condition && userDb.unlock(code)) {
+                unlocked.add(code)
                 Achievements.def(code)?.let { gained.add(it) }
             }
         }
 
+        // ---- 累计学习词数 ----
         tryUnlock(Achievements.FIRST_STEP, ov.totalLearned >= 1)
+        tryUnlock(Achievements.LEARN_20, ov.totalLearned >= 20)
         tryUnlock(Achievements.LEARN_50, ov.totalLearned >= 50)
+        tryUnlock(Achievements.LEARN_100, ov.totalLearned >= 100)
         tryUnlock(Achievements.LEARN_200, ov.totalLearned >= 200)
+        tryUnlock(Achievements.LEARN_300, ov.totalLearned >= 300)
         tryUnlock(Achievements.LEARN_500, ov.totalLearned >= 500)
+        tryUnlock(Achievements.LEARN_800, ov.totalLearned >= 800)
+        tryUnlock(Achievements.LEARN_1000, ov.totalLearned >= 1000)
+        tryUnlock(Achievements.LEARN_1500, ov.totalLearned >= 1500)
+        tryUnlock(Achievements.LEARN_2000, ov.totalLearned >= 2000)
+        tryUnlock(Achievements.LEARN_3000, ov.totalLearned >= 3000)
+        tryUnlock(Achievements.LEARN_5000, ov.totalLearned >= 5000)
+
+        // ---- 掌握词数 ----
+        tryUnlock(Achievements.MASTER_50, ov.mastered >= 50)
+        tryUnlock(Achievements.MASTER_100, ov.mastered >= 100)
+        tryUnlock(Achievements.MASTER_200, ov.mastered >= 200)
+        tryUnlock(Achievements.MASTER_300, ov.mastered >= 300)
+        tryUnlock(Achievements.MASTER_500, ov.mastered >= 500)
+        tryUnlock(Achievements.MASTER_800, ov.mastered >= 800)
+        tryUnlock(Achievements.MASTER_1000, ov.mastered >= 1000)
+        tryUnlock(Achievements.MASTER_2000, ov.mastered >= 2000)
+
+        // ---- 连续打卡（当前连续 / 历史最长分开判：断签后历史记录仍该保留）----
         tryUnlock(Achievements.STREAK_3, ov.streakDays >= 3)
         tryUnlock(Achievements.STREAK_7, ov.streakDays >= 7)
         tryUnlock(Achievements.STREAK_10, ov.streakDays >= 10)
+        tryUnlock(Achievements.STREAK_15, ov.streakDays >= 15)
+        tryUnlock(Achievements.STREAK_21, ov.streakDays >= 21)
         tryUnlock(Achievements.STREAK_30, ov.streakDays >= 30)
+        tryUnlock(Achievements.STREAK_60, ov.streakDays >= 60)
+        tryUnlock(Achievements.STREAK_100, ov.streakDays >= 100)
+        tryUnlock(Achievements.STREAK_180, ov.streakDays >= 180)
+        tryUnlock(Achievements.STREAK_365, ov.streakDays >= 365)
+        tryUnlock(Achievements.BEST_STREAK_7, ov.bestStreak >= 7)
+        tryUnlock(Achievements.BEST_STREAK_30, ov.bestStreak >= 30)
+        tryUnlock(Achievements.BEST_STREAK_100, ov.bestStreak >= 100)
+        tryUnlock(Achievements.BEST_STREAK_365, ov.bestStreak >= 365)
+
+        // ---- 闯关次数 ----
         tryUnlock(Achievements.QUIZ_FIRST, ov.quizPlayed >= 1)
+        tryUnlock(Achievements.QUIZ_5, ov.quizPlayed >= 5)
+        tryUnlock(Achievements.QUIZ_10, ov.quizPlayed >= 10)
+        tryUnlock(Achievements.QUIZ_20, ov.quizPlayed >= 20)
+        tryUnlock(Achievements.QUIZ_50, ov.quizPlayed >= 50)
+        tryUnlock(Achievements.QUIZ_100, ov.quizPlayed >= 100)
+
+        // ---- 单次闯关得分（历史最高分已包含刚写入的本局记录）----
+        tryUnlock(Achievements.QUIZ_SCORE_100, ov.bestScore >= 100)
+        tryUnlock(Achievements.QUIZ_SCORE_200, ov.bestScore >= 200)
         tryUnlock(Achievements.QUIZ_SCORE_300, ov.bestScore >= 300)
-        tryUnlock(Achievements.MASTER_50, ov.mastered >= 50)
-        tryUnlock(Achievements.MASTER_200, ov.mastered >= 200)
-        tryUnlock(Achievements.ACCURACY_90, ov.totalCorrect + ov.totalWrong >= 50 && ov.accuracy >= 90)
+        tryUnlock(Achievements.QUIZ_SCORE_400, ov.bestScore >= 400)
+        tryUnlock(Achievements.QUIZ_SCORE_500, ov.bestScore >= 500)
+
+        // ---- 累计学习时长 ----
+        tryUnlock(Achievements.MINUTES_30, ov.totalMinutes >= 30)
+        tryUnlock(Achievements.MINUTES_60, ov.totalMinutes >= 60)
+        tryUnlock(Achievements.MINUTES_120, ov.totalMinutes >= 120)
+        tryUnlock(Achievements.MINUTES_300, ov.totalMinutes >= 300)
+        tryUnlock(Achievements.MINUTES_600, ov.totalMinutes >= 600)
+        tryUnlock(Achievements.MINUTES_1200, ov.totalMinutes >= 1200)
+
+        // ---- 收藏 ----
         tryUnlock(Achievements.FAV_20, favCount >= 20)
+        tryUnlock(Achievements.FAV_50, favCount >= 50)
+        tryUnlock(Achievements.FAV_100, favCount >= 100)
+        tryUnlock(Achievements.FAV_200, favCount >= 200)
+
+        // ---- 正确率（题目太少时正确率没有统计意义，因此按档位设作答数下限）----
+        tryUnlock(Achievements.ACCURACY_90, answered >= 50 && ov.accuracy >= 90)
+        tryUnlock(Achievements.ACCURACY_95, answered >= 100 && ov.accuracy >= 95)
+        tryUnlock(Achievements.ACCURACY_98, answered >= 200 && ov.accuracy >= 98)
+
+        // ---- 单日学习量 ----
         tryUnlock(Achievements.GOAL_DONE, ov.todayLearned >= dailyGoal)
+        tryUnlock(Achievements.DAILY_50, ov.todayLearned >= 50)
+        tryUnlock(Achievements.DAILY_100, ov.todayLearned >= 100)
+
+        // ---- 学习时段 ----
         tryUnlock(Achievements.NIGHT_OWL, hour >= 22 && ov.totalLearned >= 1)
         tryUnlock(Achievements.EARLY_BIRD, hour in 1..6 && ov.totalLearned >= 1)
+        tryUnlock(Achievements.MIDNIGHT, hour in 0..1 && ov.totalLearned >= 1)
+        tryUnlock(Achievements.NOON_STUDY, hour == 12 && ov.totalLearned >= 1)
 
-        // 本次闯关专属的成就。QUIZ_SCORE_300 上面已按历史最高分判过一次，
+        // 本次闯关专属的成就。QUIZ_SCORE_* 上面已按历史最高分判过一次，
         // 这里再按「本局得分」判一次是有意为之：本局刷出高分也应立即解锁。
+        // 连击只有本局才知道（历史上没有存 maxCombo 的聚合值），只能放在这里判。
         lastQuiz?.let {
             tryUnlock(Achievements.QUIZ_PERFECT, it.total > 0 && it.correct == it.total)
+            tryUnlock(Achievements.QUIZ_COMBO_5, it.maxCombo >= 5)
             tryUnlock(Achievements.QUIZ_COMBO_10, it.maxCombo >= 10)
+            tryUnlock(Achievements.QUIZ_COMBO_20, it.maxCombo >= 20)
+            tryUnlock(Achievements.QUIZ_COMBO_30, it.maxCombo >= 30)
+            tryUnlock(Achievements.QUIZ_COMBO_50, it.maxCombo >= 50)
+            tryUnlock(Achievements.QUIZ_SCORE_100, it.score >= 100)
+            tryUnlock(Achievements.QUIZ_SCORE_200, it.score >= 200)
             tryUnlock(Achievements.QUIZ_SCORE_300, it.score >= 300)
+            tryUnlock(Achievements.QUIZ_SCORE_400, it.score >= 400)
+            tryUnlock(Achievements.QUIZ_SCORE_500, it.score >= 500)
 
             // 专题关卡成就：只在对应的专题结算时才去查表，
             // 避免普通单元 / 首字母闯关也白白多跑几次 COUNT 查询。
             when (it.unit) {
                 QUIZ_SCOPE_CONFUSABLE -> {
                     tryUnlock(Achievements.CONFUSABLE_FIRST, it.total > 0)
-                    tryUnlock(
-                        Achievements.CONFUSABLE_PERFECT_5,
-                        userDb.quizPerfectCountOfUnit(QUIZ_SCOPE_CONFUSABLE) >= 5
-                    )
+                    val perfect = userDb.quizPerfectCountOfUnit(QUIZ_SCOPE_CONFUSABLE)
+                    tryUnlock(Achievements.CONFUSABLE_PERFECT_5, perfect >= 5)
+                    tryUnlock(Achievements.CONFUSABLE_PERFECT_10, perfect >= 10)
+                    tryUnlock(Achievements.CONFUSABLE_PERFECT_20, perfect >= 20)
                 }
                 QUIZ_SCOPE_TRANSLATION -> {
                     tryUnlock(Achievements.TRANSLATION_FIRST, it.total > 0)
-                    tryUnlock(
-                        Achievements.TRANSLATION_PERFECT_5,
-                        userDb.quizPerfectCountOfUnit(QUIZ_SCOPE_TRANSLATION) >= 5
-                    )
+                    val perfect = userDb.quizPerfectCountOfUnit(QUIZ_SCOPE_TRANSLATION)
+                    tryUnlock(Achievements.TRANSLATION_PERFECT_5, perfect >= 5)
+                    tryUnlock(Achievements.TRANSLATION_PERFECT_10, perfect >= 10)
+                    tryUnlock(Achievements.TRANSLATION_PERFECT_20, perfect >= 20)
                 }
                 else -> {
                     // 专题成就按关卡类型判断，普通闯关不触发；
@@ -518,5 +614,6 @@ class VocabRepository(context: Context) {
         private const val KEY_RATE = "speech_rate"
         private const val KEY_ICON_STYLE = "icon_style"
         private const val KEY_THEME = "theme_mode"
+        private const val KEY_ANIM = "animations_enabled"
     }
 }
