@@ -173,6 +173,16 @@ class VocabRepository(context: Context) {
         return dueWords(40) + newWords(remain)
     }
 
+    /**
+     * 「继续学习」队列：今日目标完成后的加量学习。
+     *
+     * 正常今日队列在目标达成后只剩到期复习词（newWords 补 0 个），全部还完即空，
+     * 首页按钮显示「今日已完成」。此方法在到期词之外再预学一批新词，
+     * 让用户完成每日目标后还能主动加量（超前学习，不计入当日目标口径）。
+     * 返回为空（既无到期词也无新词）时由 startQueue 统一弹提示，无需在此特判。
+     */
+    fun extraQueue(count: Int = 20): List<Word> = dueWords(40) + newWords(count)
+
     fun unitWords(unit: Int): List<Word> = wordDb.wordsOfUnit(stage, unit)
 
     fun favWords(): List<Word> {

@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -66,7 +67,8 @@ import kotlin.math.roundToInt
 @Composable
 fun HomeScreen(
     vm: AppViewModel,
-    onStartToday: () -> Unit
+    onStartToday: () -> Unit,
+    onStartExtra: () -> Unit
 ) {
     val state by vm.home.collectAsState()
     val ov = state.overview
@@ -176,19 +178,51 @@ fun HomeScreen(
                         // 点击仍然会走 onStartToday —— startTodayStudy 拿到空队列后
                         // 只是弹一句提示，但导航是无条件执行的，用户会被带进一个空的学习页。
                         val canStart = state.queueCount > 0
-                        Button(
-                            onClick = onStartToday,
-                            enabled = canStart,
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = if (canStart) "开始今日学习" else "今日已完成",
-                                fontWeight = FontWeight.SemiBold
-                            )
+                        if (canStart) {
+                            Button(
+                                onClick = onStartToday,
+                                shape = RoundedCornerShape(16.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "开始今日学习",
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        } else {
+                            // 今日已完成：左侧只作状态展示（禁用态），右侧「继续学习」
+                            // 走 extraQueue（到期复习 + 预学一批新词），完成目标后仍可加量。
+                            // 预学词同样计入学习记录，只是不再撑当日目标的进度（进度按
+                            // todayLearned/goal 计算并截断到 1f，不会溢出）。
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = {},
+                                    enabled = false,
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "今日已完成",
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Button(
+                                    onClick = onStartExtra,
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = "继续学习",
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
                         }
                     }
                 }

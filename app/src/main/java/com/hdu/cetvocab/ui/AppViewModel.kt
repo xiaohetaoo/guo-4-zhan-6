@@ -463,6 +463,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 今日目标完成后的「继续学习」：先还清到期复习，再预学一批新词（超前学习）。
+     * 与「开始今日学习」共用同一套学习页与结算逻辑，只是取数口径不同。
+     */
+    fun startExtraStudy() {
+        viewModelScope.launch {
+            val queue = withContext(Dispatchers.IO) { repo.extraQueue() }
+            startQueue("继续学习", queue)
+        }
+    }
+
     fun startUnitStudy(unit: Int) {
         viewModelScope.launch {
             val queue = withContext(Dispatchers.IO) { repo.unitWords(unit) }

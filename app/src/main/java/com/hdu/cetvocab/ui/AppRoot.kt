@@ -286,6 +286,10 @@ private fun AppNavHost(
                 onStartToday = {
                     vm.startTodayStudy()
                     nav.navigate(Routes.STUDY)
+                },
+                onStartExtra = {
+                    vm.startExtraStudy()
+                    nav.navigate(Routes.STUDY)
                 }
             )
         }
