@@ -53,7 +53,6 @@ import com.hdu.cetvocab.ui.components.IconFlame
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.components.TopicCard
-import com.hdu.cetvocab.ui.components.WeekBarChart
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 import com.hdu.cetvocab.ui.theme.springPress
 import kotlin.math.PI
@@ -168,15 +167,6 @@ fun ProfileScreen(
         // ---------- 段位独立卡 ----------
         item {
             TierCard(learnedWords = ov.totalLearned)
-        }
-
-        // ---------- 近 14 天 ----------
-        item {
-            AppCard {
-                SectionTitle(text = "近 14 天学习量")
-                Spacer(Modifier.height(14.dp))
-                WeekBarChart(stats = state.weekStats, goal = state.goal)
-            }
         }
 
         // ---------- 成就 ----------
