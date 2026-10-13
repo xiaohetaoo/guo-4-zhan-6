@@ -32,7 +32,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -133,13 +132,22 @@ fun HomeScreen(
 
         // ---------- 今日进度 ----------
         item {
+            /*
+             * 版式：圆环 + 文字并排在上半，**操作按钮独占整行宽度沉到卡片底部**。
+             *
+             * 此前按钮和圆环挤在同一个 Row 的右列里：圆环 116dp + 间距 18dp 之后，
+             * 右列只剩约 110dp，两个按钮各分一半、再各扣掉 Material 按钮默认的
+             * 24dp 左右内边距，留给文字的宽度只剩几个 dp —— 结果「今日已完成」
+             * 被竖排成一列一个字，「开始今日学习」也会折成两行。
+             * 按钮要好看，前提是给它整行的宽度，所以把它移出这个 Row。
+             */
             AppCard(color = LocalAppColors.current.cardPeach, padding = 20.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ProgressRing(progress = progress, diameter = 116.dp, strokeWidth = 12.dp) {
+                    ProgressRing(progress = progress, diameter = 104.dp, strokeWidth = 11.dp) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = "${ov.todayLearned}",
-                                fontSize = 30.sp,
+                                fontSize = 26.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -150,7 +158,7 @@ fun HomeScreen(
                             )
                         }
                     }
-                    Spacer(Modifier.width(18.dp))
+                    Spacer(Modifier.width(16.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -168,62 +176,72 @@ fun HomeScreen(
                             }
                         }
                         Spacer(Modifier.height(6.dp))
+                        // 三个数字各自为政地摆在一起会读成噪音（0 词尤其像坏掉了），
+                        // 按实际情况只说当前最该知道的那件事。
                         Text(
-                            text = "待复习 ${state.dueCount} 词 · 队列 ${state.queueCount} 词",
+                            text = when {
+                                state.dueCount > 0 ->
+                                    "待复习 ${state.dueCount} 词 · 队列 ${state.queueCount} 词"
+                                state.queueCount > 0 ->
+                                    "复习已还清 · 队列 ${state.queueCount} 词"
+                                else -> "复习已还清 · 今日额度用满"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(14.dp))
-                        // 队列为空时按钮必须禁用：此前只把文案换成「今日已完成」，
-                        // 点击仍然会走 onStartToday —— startTodayStudy 拿到空队列后
-                        // 只是弹一句提示，但导航是无条件执行的，用户会被带进一个空的学习页。
-                        val canStart = state.queueCount > 0
-                        if (canStart) {
-                            Button(
-                                onClick = onStartToday,
-                                shape = RoundedCornerShape(16.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = "开始今日学习",
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        } else {
-                            // 今日已完成：左侧只作状态展示（禁用态），右侧「继续学习」
-                            // 走 extraQueue（到期复习 + 预学一批新词），完成目标后仍可加量。
-                            // 预学词同样计入学习记录，只是不再撑当日目标的进度（进度按
-                            // todayLearned/goal 计算并截断到 1f，不会溢出）。
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                OutlinedButton(
-                                    onClick = {},
-                                    enabled = false,
-                                    shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(
-                                        text = "今日已完成",
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                                Button(
-                                    onClick = onStartExtra,
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(
-                                        text = "继续学习",
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            }
-                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                // 队列为空时按钮必须禁用：此前只把文案换成「今日已完成」，
+                // 点击仍然会走 onStartToday —— startTodayStudy 拿到空队列后
+                // 只是弹一句提示，但导航是无条件执行的，用户会被带进一个空的学习页。
+                val canStart = state.queueCount > 0
+                if (canStart) {
+                    Button(
+                        onClick = onStartToday,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Text(text = "开始今日学习", fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    /*
+                     * 目标达成态：不再摆一个禁用的假按钮占位（灰底 + 竖排文字既难看
+                     * 又容易被当成可点），状态改用一行 Tag 说清楚，动作只留一个整行的
+                     * 「继续学习」—— 走 extraQueue（到期复习 + 预学一批新词），
+                     * 完成目标后仍可加量。预学词同样计入学习记录，只是当日进度已经
+                     * 按 todayLearned/goal 截断到 1f，不会溢出。
+                     */
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Tag(
+                            text = "今日已完成",
+                            container = LocalAppColors.current.cardMint,
+                            contentColor = LocalAppColors.current.success
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "想再学一批，可以提前学下一组新词",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = onStartExtra,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Text(text = "继续学习", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
