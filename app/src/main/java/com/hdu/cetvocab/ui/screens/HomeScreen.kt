@@ -1,8 +1,14 @@
 package com.hdu.cetvocab.ui.screens
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -164,8 +172,13 @@ fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(14.dp))
+                        // 队列为空时按钮必须禁用：此前只把文案换成「今日已完成」，
+                        // 点击仍然会走 onStartToday —— startTodayStudy 拿到空队列后
+                        // 只是弹一句提示，但导航是无条件执行的，用户会被带进一个空的学习页。
+                        val canStart = state.queueCount > 0
                         Button(
                             onClick = onStartToday,
+                            enabled = canStart,
                             shape = RoundedCornerShape(16.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary
@@ -173,7 +186,7 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = if (state.queueCount == 0) "今日已完成" else "开始今日学习",
+                                text = if (canStart) "开始今日学习" else "今日已完成",
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -248,6 +261,42 @@ fun HomeScreen(
 }
 
 /**
+ * 四六级分段控件的左右滑动手势：向左滑切六级，向右滑切四级。
+ *
+ * 方向与控件里的位置一致 —— 四级在左格、六级在右格，向左滑（手指把内容往左推）
+ * 露出右格，也就是六级。
+ *
+ * 阈值取 36dp 而不是底部导航那个 72dp：这个控件只有 ~110dp 宽，
+ * 沿用 72dp 的话在这么窄的范围里根本滑不动。36dp 约为控件宽的 1/3，
+ * 既滑得动又不至于点一下就误切。
+ */
+private fun Modifier.stageSwipe(stage: Int, onSelect: (Int) -> Unit): Modifier =
+    pointerInput(stage) {
+        val threshold = 36.dp.toPx()
+        var total = 0f
+        var fired = false
+        fun reset() { total = 0f; fired = false }
+        detectHorizontalDragGestures(
+            onDragStart = { reset() },
+            onDragEnd = { reset() },
+            onDragCancel = { reset() },
+            onHorizontalDrag = { _, dragAmount ->
+                if (fired) return@detectHorizontalDragGestures
+                total += dragAmount
+                val target = when {
+                    total <= -threshold -> WordDb.STAGE_CET6  // 向左滑 → 右格（六级）
+                    total >= threshold -> WordDb.STAGE_CET4   // 向右滑 → 左格（四级）
+                    else -> 0
+                }
+                if (target != 0 && target != stage) {
+                    fired = true
+                    onSelect(target)
+                }
+            }
+        )
+    }
+
+/**
  * 四六级分段控件。
  *
  * 原实现是「选中项瞬间换底色」——手指抬起的同一帧颜色就跳过去了，
@@ -277,6 +326,7 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .stageSwipe(stage, onSelect)
     ) {
         // 指示器层：与内容层一样内缩 3dp。
         Box(
@@ -293,35 +343,61 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
                     .background(MaterialTheme.colorScheme.primary)
             )
         }
-        Row(modifier = Modifier.padding(3.dp)) {
-            items.forEach { (s, label) ->
-                val selected = s == stage
-                val textColor by animateColorAsState(
-                    targetValue = if (selected) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    animationSpec = Motion.effects(),
-                    label = "stageText"
-                )
-                Box(
-                    modifier = Modifier
-                        .width(itemWidth)
-                        .clip(RoundedCornerShape(13.dp))
-                        .selectable(
-                            selected = selected,
-                            role = Role.Tab,
-                            interactionSource = interaction,
-                            indication = null,
-                            onClick = { if (!selected) onSelect(s) }
+        // 内容层也要左右滑动：光有指示器动、文字原地变色，方向感仍然很弱。
+        // 这里让两级标签整体朝切换方向滑一次（四级→六级向右、反之向左），
+        // 位移取控件自身宽度的一半 —— 比整屏轻，但在 110dp 宽的小控件上已经足够明确。
+        // 外层 Box 的 clip 会把滑出部分裁掉，看上去就是内容在控件里横向翻过一格。
+        AnimatedContent(
+            targetState = stage,
+            transitionSpec = {
+                val forward = targetState > initialState
+                if (forward) {
+                    (slideInHorizontally(Motion.spatial()) { it / 2 } + fadeIn(Motion.effects()))
+                        .togetherWith(
+                            slideOutHorizontally(Motion.spatial()) { -it / 2 } +
+                                fadeOut(Motion.effects())
                         )
-                        .padding(vertical = 7.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                        color = textColor
+                } else {
+                    (slideInHorizontally(Motion.spatial()) { -it / 2 } + fadeIn(Motion.effects()))
+                        .togetherWith(
+                            slideOutHorizontally(Motion.spatial()) { it / 2 } +
+                                fadeOut(Motion.effects())
+                        )
+                }
+            },
+            contentAlignment = Alignment.CenterStart,
+            label = "stageSwitch"
+        ) { currentStage ->
+            Row(modifier = Modifier.padding(3.dp)) {
+                items.forEach { (s, label) ->
+                    val selected = s == currentStage
+                    val textColor by animateColorAsState(
+                        targetValue = if (selected) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        animationSpec = Motion.effects(),
+                        label = "stageText"
                     )
+                    Box(
+                        modifier = Modifier
+                            .width(itemWidth)
+                            .clip(RoundedCornerShape(13.dp))
+                            .selectable(
+                                selected = selected,
+                                role = Role.Tab,
+                                interactionSource = interaction,
+                                indication = null,
+                                onClick = { if (!selected) onSelect(s) }
+                            )
+                            .padding(vertical = 7.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            color = textColor
+                        )
+                    }
                 }
             }
         }

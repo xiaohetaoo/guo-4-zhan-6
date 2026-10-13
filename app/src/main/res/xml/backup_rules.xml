@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<full-backup-content>
-    <include domain="database" path="user_data.db" />
-    <exclude domain="database" path="words.db" />
-    <exclude domain="sharedpref" path="vocab_meta.xml" />
-</full-backup-content>

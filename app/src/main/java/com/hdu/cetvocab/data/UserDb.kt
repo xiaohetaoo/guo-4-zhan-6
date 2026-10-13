@@ -311,6 +311,34 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
             if (it.moveToFirst()) it.getInt(0) else 0
         }
 
+    /**
+     * 排行榜页顶部三块统计（最高分 / 平均分 / 最高正确率 + 总次数），一次查询算完。
+     *
+     * 关键：在**全表**上聚合，而不是拿 `quizRecords(50)` 的结果现算 ——
+     * 后者在闯关超过 50 次后会把统计范围悄悄缩到那 50 条里，
+     * 出现「共 87 次闯关记录」却「平均分只按 50 条算」的自相矛盾。
+     *
+     * `IFNULL` 是为了让「一条记录都没有」时也返回一行 0，而不是 NULL。
+     * `correct*100/total` 在 SQLite 里是整数除法，与 [QuizRecord.accuracy] 口径一致。
+     */
+    fun quizAggregate(): QuizAggregate =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*), IFNULL(MAX(score), 0), IFNULL(CAST(AVG(score) AS INTEGER), 0), " +
+                "IFNULL(MAX(CASE WHEN total > 0 THEN correct * 100 / total ELSE 0 END), 0) " +
+                "FROM quiz_record WHERE $RANKED_ONLY", null
+        ).use { c ->
+            if (c.moveToFirst()) {
+                QuizAggregate(
+                    count = c.getInt(0),
+                    bestScore = c.getInt(1),
+                    avgScore = c.getInt(2),
+                    bestAccuracy = c.getInt(3)
+                )
+            } else {
+                QuizAggregate()
+            }
+        }
+
     /** 某一专题关卡（按 unit 范围值）的完成次数 */
     fun quizCountOfUnit(unit: Int): Int =
         readableDatabase.rawQuery(

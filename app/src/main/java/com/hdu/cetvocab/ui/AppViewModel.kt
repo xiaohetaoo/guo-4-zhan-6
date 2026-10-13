@@ -10,6 +10,7 @@ import com.hdu.cetvocab.data.DayStat
 import com.hdu.cetvocab.data.QUIZ_SCOPE_CONFUSABLE
 import com.hdu.cetvocab.data.QUIZ_SCOPE_TRANSLATION
 import com.hdu.cetvocab.data.QuizKind
+import com.hdu.cetvocab.data.QuizAggregate
 import com.hdu.cetvocab.data.QuizQuestion
 import com.hdu.cetvocab.data.QuizRecord
 import com.hdu.cetvocab.data.StudyOverview
@@ -152,10 +153,10 @@ data class ProfileUiState(
     val themeMode: Int = VocabRepository.THEME_SYSTEM,
     val leaderboard: List<QuizRecord> = emptyList(),
     /**
-     * 闯关总次数（不受排行榜 50 条上限影响）。
-     * 排行榜副标题此前用 `leaderboard.size`，超过 50 次后显示的「共 N 次」就不准了。
+     * 排行榜顶部统计的聚合口径（次数 / 最高分 / 平均分 / 最高正确率）。
+     * 由 SQL 在**全表**上算，不受 [leaderboard] 最多 50 条的限制。
      */
-    val quizPlayedCount: Int = 0
+    val aggregate: QuizAggregate = QuizAggregate()
 )
 
 // ---------------- ViewModel ----------------
@@ -206,8 +207,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 闯关结算中标志：保证一次闯关只写入一条成绩记录 */
     private var finishing = false
 
-    /** 当前题目的起始时刻；0 表示计时处于暂停态（应用在后台） */
+    /** 当前题目的起始时刻；0 表示计时处于暂停态（应用在后台、或闯关页不在前台） */
     private var questionStartTs = 0L
+
+    /** 闯关页是否在前台（在组合中）。用于区分「切到别的标签」与「退到后台」 */
+    private var quizScreenActive = false
 
     // ---------- 学习时长计时 ----------
     // 只累计「学习页在前台 **且** 应用在前台」的时间。
@@ -389,12 +393,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // 用 copy 合并，而不是 `_learn.value = data` 整体替换：
             // refreshLearn 会被收藏、学习结束等操作随时触发，整体替换会把用户
             // 正在浏览的「全部单词」列表和搜索关键词一起清空（列表突然变空、输入框自己清空）。
+            //
+            // 但**跨级别时必须清空**这些浏览态：四级→六级后 allWords 还留着四级的词表，
+            // 「预览全部单词」会显示上一级别的词；搜索框里的关键词与结果同样是上一级别的。
+            // 这是数据正确性问题，不能靠「保留体验」搪塞过去。
             _learn.update { old ->
+                val sameStage = old.stage == data.stage
                 data.copy(
-                    query = old.query,
-                    searchResult = old.searchResult,
-                    allWords = old.allWords,
-                    allWordsLoading = old.allWordsLoading
+                    query = if (sameStage) old.query else "",
+                    searchResult = if (sameStage) old.searchResult else emptyList(),
+                    allWords = if (sameStage) old.allWords else emptyList(),
+                    allWordsLoading = if (sameStage) old.allWordsLoading else false
                 )
             }
         }
@@ -402,10 +411,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun previewAllWords() {
         val stage = repo.stage
+        // 已按当前级别加载过就直接复用。这里必须同时要求 stage 一致 ——
+        // 只看 allWords 非空会把上一级别的词表当成当前级别的结果。
         if (_learn.value.stage == stage && _learn.value.allWords.isNotEmpty()) return
         _learn.update { it.copy(allWordsLoading = true, allWords = emptyList()) }
         viewModelScope.launch {
             val words = withContext(Dispatchers.IO) { repo.wordDb.wordsOfStage(stage) }
+            // 加载期间用户又切了级别：结果已过期，丢弃而不是覆盖新状态
+            if (repo.stage != stage) return@launch
             _learn.update {
                 it.copy(stage = stage, allWords = words, allWordsLoading = false)
             }
@@ -428,10 +441,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         // 搜索结果要跟随当前级别：六级词库包含了四级全部词条，
         // 跨级别搜会让同一个词出现两次。
-        val stage = _learn.value.stage
+        //
+        // 级别取 repo.stage（真值来源）而不是 _learn.value.stage：
+        // 后者要等 refreshLearn 跑完才更新，用户刚切级别就输入时读到的是旧级别。
+        val stage = repo.stage
         searchJob = viewModelScope.launch {
             delay(SEARCH_DEBOUNCE_MS)
             val result = withContext(Dispatchers.IO) { repo.wordDb.search(keyword, stage) }
+            // 防抖期间又切了级别：这次结果属于旧级别，丢弃
+            if (repo.stage != stage) return@launch
             _learn.update { it.copy(searchResult = result) }
         }
     }
@@ -594,7 +612,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun onAppForeground() {
         resumeStudyTimer()
-        if (_quiz.value.active && !_quiz.value.finished && questionStartTs <= 0) {
+        // 只有闯关页确实在前台时才恢复本题计时。
+        // 否则会出现这种情况：用户把应用退到后台时正停在「首页」，
+        // 回到前台后计时被恢复，而人还在首页 —— 这段停留会被算进本关用时。
+        if (quizScreenActive && _quiz.value.active && !_quiz.value.finished && questionStartTs <= 0) {
             questionStartTs = System.currentTimeMillis()
         }
     }
@@ -607,6 +628,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun onAppBackground() {
         flushStudyTimer()
+        pauseQuizTimer()
+    }
+
+    /**
+     * 闯关页离开组合：结算并暂停本题计时。
+     *
+     * 用户点底部标签切到别的页面时，应用并没有退到后台，[onAppBackground] 不会被调用；
+     * 若不在这里停表，离开的这段时间会被算进本关用时。进入组合时再恢复。
+     */
+    fun onQuizScreenExit() {
+        quizScreenActive = false
+        pauseQuizTimer()
+    }
+
+    /** 闯关页进入组合：若本局仍在进行且处于停表状态，重新起表。 */
+    fun onQuizScreenEnter() {
+        quizScreenActive = true
+        if (_quiz.value.active && !_quiz.value.finished && questionStartTs <= 0) {
+            questionStartTs = System.currentTimeMillis()
+        }
+    }
+
+    /** 把「当前这一题」已经花掉的时间结算进 elapsedMs，并停表（questionStartTs 置 0）。 */
+    private fun pauseQuizTimer() {
         if (questionStartTs <= 0) return
         val spent = (System.currentTimeMillis() - questionStartTs).coerceAtLeast(0)
         questionStartTs = 0L
@@ -805,7 +850,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 先把本题用时结算进 elapsedMs，再推进
         val now = System.currentTimeMillis()
         val spent = if (questionStartTs > 0) (now - questionStartTs).coerceAtLeast(0) else 0L
-        questionStartTs = now
+        // 先停表；确认还有下一题时再重新起表。
+        // 若直接置成 now，最后一题结算完 questionStartTs 仍非 0，
+        // 之后任何一次「暂停计时」都会把结算页停留的时间也算进本关用时。
+        questionStartTs = 0L
 
         val state = _quiz.value
         val next = state.index + 1
@@ -813,6 +861,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _quiz.update { it.copy(elapsedMs = it.elapsedMs + spent) }
             finishQuiz()
         } else {
+            questionStartTs = now
             _quiz.update {
                 it.copy(
                     index = next,
@@ -972,7 +1021,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     iconStyle = repo.iconStyle,
                     themeMode = repo.themeMode,
                     leaderboard = repo.userDb.quizRecords(50),
-                    quizPlayedCount = repo.userDb.quizPlayedCount()
+                    aggregate = repo.userDb.quizAggregate()
                 )
             }
             _profile.value = data
@@ -982,9 +1031,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshLeaderboard() {
         viewModelScope.launch {
             val data = withContext(Dispatchers.IO) {
-                repo.userDb.quizRecords(50) to repo.userDb.quizPlayedCount()
+                repo.userDb.quizRecords(50) to repo.userDb.quizAggregate()
             }
-            _profile.update { it.copy(leaderboard = data.first, quizPlayedCount = data.second) }
+            _profile.update { it.copy(leaderboard = data.first, aggregate = data.second) }
         }
     }
 

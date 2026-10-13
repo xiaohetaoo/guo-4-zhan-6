@@ -65,6 +65,24 @@ data class QuizRecord(
 }
 
 /**
+ * 闯关成绩的聚合口径（排行榜页顶部三块统计用）。
+ *
+ * 必须由 SQL 在**全表**上算，不能拿榜单列表（最多 50 条）现算：
+ * 超过 50 次之后，「平均分」与「最高正确率」就只在最近/最高的那 50 条里统计，
+ * 数字会与「共 N 次闯关记录」自相矛盾。同样只统计「参与排名」的记录。
+ */
+data class QuizAggregate(
+    /** 参与排名的闯关次数 */
+    val count: Int = 0,
+    /** 历史最高分 */
+    val bestScore: Int = 0,
+    /** 平均分（整数，向下取整） */
+    val avgScore: Int = 0,
+    /** 最高正确率（百分比整数） */
+    val bestAccuracy: Int = 0
+)
+
+/**
  * 闯关范围编码（`QuizUiState.unit` 与 `QuizRecord.unit` 共用同一套约定）：
  * - `>= 1`    → 单元挑战，值即单元号
  * - `-1`      → 全阶段全词挑战

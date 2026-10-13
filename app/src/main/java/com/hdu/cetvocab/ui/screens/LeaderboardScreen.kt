@@ -48,6 +48,7 @@ import com.hdu.cetvocab.ui.theme.LocalAppColors
 fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit) {
     val state by vm.profile.collectAsState()
     val list = state.leaderboard
+    val agg = state.aggregate
 
     LaunchedEffect(Unit) { vm.refreshLeaderboard() }
 
@@ -56,7 +57,7 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit) {
             title = "历次成绩排行榜",
             // 用真实总次数，而不是 list.size：
             // 数据源 quizRecords(50) 最多返回 50 条，超过 50 次后「共 N 次」就不准了。
-            subtitle = "共 ${state.quizPlayedCount} 次闯关记录 · 按得分从高到低",
+            subtitle = "共 ${agg.count} 次闯关记录 · 按得分从高到低",
             onBack = onBack
         )
 
@@ -65,9 +66,12 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit) {
             return
         }
 
-        val best = list.maxOf { it.score }
-        val avg = list.sumOf { it.score } / list.size
-        val bestAccuracy = list.maxOf { it.accuracy }
+        // 三块统计全部取 SQL 在全表上的聚合结果，而不是拿上面最多 50 条的 list 现算 ——
+        // 否则闯关超过 50 次后，平均分 / 最高正确率会只统计那 50 条，
+        // 与副标题的「共 N 次」自相矛盾。
+        val best = agg.bestScore
+        val avg = agg.avgScore
+        val bestAccuracy = agg.bestAccuracy
 
         LazyColumn(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),

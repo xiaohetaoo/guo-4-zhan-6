@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,7 +51,6 @@ import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.IconChevronRight
 import com.hdu.cetvocab.ui.components.IconFlame
 import com.hdu.cetvocab.ui.components.SectionTitle
-import com.hdu.cetvocab.ui.components.StatTile
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.components.TopicCard
 import com.hdu.cetvocab.ui.components.WeekBarChart
@@ -96,12 +96,16 @@ fun ProfileScreen(
         }
 
         // ---------- 连续打卡主卡 ----------
+        // 之前段位塞在同一张卡最右侧，把中间"标题 + Tag 行"挤得只剩 ~150dp，
+        // 标题里挤进 5+ 汉字即换行（「连续打卡 0 天」被拆成「连续打卡 0」与
+        // 「天」两行），Tag 行也偶发渲染成竖条状。这里把连续打卡与段位拆成
+        // 两张独立卡片，整页节奏与首页的「学习 / 成就」更接近。
         item {
-            AppCard(color = LocalAppColors.current.cardRose, padding = 20.dp) {
+            AppCard(color = LocalAppColors.current.cardRose, padding = 18.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(
                         modifier = Modifier
-                            .size(84.dp)
+                            .size(76.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -109,7 +113,7 @@ fun ProfileScreen(
                     ) {
                         Text(
                             text = "${ov.streakDays}",
-                            fontSize = 30.sp,
+                            fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -119,14 +123,17 @@ fun ProfileScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Spacer(Modifier.width(18.dp))
+                    Spacer(Modifier.width(16.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            // maxLines = 1：过去被 TierBadge 挤到宽度不足时，
+                            // 长标题会在此换行，让「连续打卡 X 天」碎成两行。
                             Text(
-                                text = if (ov.streakDays >= 10) "已连续打卡 ${ov.streakDays} 天"
-                                else "连续打卡 ${ov.streakDays} 天",
+                                text = "连续打卡 ${ov.streakDays} 天",
                                 style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             if (ov.streakDays >= 10) {
                                 Spacer(Modifier.width(5.dp))
@@ -136,13 +143,15 @@ fun ProfileScreen(
                                 )
                             }
                         }
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "历史最长连续 ${ov.bestStreak} 天 · 累计学习 ${ov.totalMinutes} 分钟",
+                            text = "历史最长连续 ${ov.bestStreak} 天 · " +
+                                "累计学习 ${ov.totalMinutes} 分钟",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Tag(text = "已学 ${ov.totalLearned} 词")
                             Tag(
@@ -152,39 +161,13 @@ fun ProfileScreen(
                             )
                         }
                     }
-                    Spacer(Modifier.width(12.dp))
-                    TierBadge(learnedWords = ov.totalLearned)
                 }
             }
         }
 
-        // ---------- 统计 ----------
+        // ---------- 段位独立卡 ----------
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatTile(
-                    label = "累计正确率",
-                    value = "${ov.accuracy}",
-                    unit = "%",
-                    modifier = Modifier.weight(1f),
-                    container = LocalAppColors.current.cardSky,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                StatTile(
-                    label = "闯关次数",
-                    value = "${ov.quizPlayed}",
-                    unit = "次",
-                    modifier = Modifier.weight(1f),
-                    container = LocalAppColors.current.cardAmber,
-                    tint = LocalAppColors.current.warning
-                )
-                StatTile(
-                    label = "最高分",
-                    value = "${ov.bestScore}",
-                    modifier = Modifier.weight(1f),
-                    container = LocalAppColors.current.cardPeach,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
+            TierCard(learnedWords = ov.totalLearned)
         }
 
         // ---------- 近 14 天 ----------
@@ -376,33 +359,88 @@ private fun GearIcon(modifier: Modifier = Modifier, color: Color) {
 }
 
 /**
- * 段位徽章：按累计已学单词数显示「青铜 / 白银 / 黄金 / 钻石 / 王者」，
- * 下方小字提示距离下一段位还差多少词。
+ * 段位卡片：与"连续打卡主卡"分开独立成一张卡片。
+ *
+ * 之前段位挤在主卡右上、把中间列挤窄，导致「连续打卡 X 天」标题换行、
+ * Tag 行偶发渲染成竖条样块。把两件事拆开后：
+ * - 主卡专心展示连续打卡，圆环 + 标题 + 副文 + Tag 三件套都宽裕，不会再换行；
+ * - 段位卡独占一张，更接近成就卡的视觉节奏，方便日后加"段位历史"等扩展内容。
+ *
+ * 内容：
+ * - 左侧：段位大字（30sp）+ "已学 X 词" 副文；
+ * - 右侧：距下一段位还差多少词，配一条 120dp 的细进度条让进度可视化。
  */
 @Composable
-private fun TierBadge(learnedWords: Int, modifier: Modifier = Modifier) {
+private fun TierCard(learnedWords: Int) {
     val tier = Tier.of(learnedWords)
     val color = tierColor(tier)
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(color.copy(alpha = 0.14f))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = tier.label,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Bold,
-            color = color
-        )
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = tier.next?.let { "距${it.label} ${tier.wordsToNext(learnedWords)} 词" }
-                ?: "已达最高段位",
-            fontSize = 9.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    val next = tier.next
+    val progress = tier.progressToNext(learnedWords)
+    AppCard(color = color.copy(alpha = 0.10f), padding = 18.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = tier.label,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = color,
+                    maxLines = 1
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "已学 $learnedWords 词",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.weight(1f)
+            ) {
+                if (next != null) {
+                    Text(
+                        text = "距 ${next.label}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "还差 ${tier.wordsToNext(learnedWords)} 词",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = color
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        color = color,
+                        trackColor = color.copy(alpha = 0.18f),
+                        modifier = Modifier
+                            .width(120.dp)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                } else {
+                    Text(
+                        text = "已达最高段位",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = color
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { 1f },
+                        color = color,
+                        trackColor = color.copy(alpha = 0.18f),
+                        modifier = Modifier
+                            .width(120.dp)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -321,7 +321,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             caption = "橙底白字",
                             onClick = { vm.setIconStyle(LauncherIcons.STYLE_SIMPLE) }
                         ) {
-                            SimpleIconPreview(simpleChar)
+                            SimpleIconPreview(
+                                if (state.stage == WordDb.STAGE_CET6) R.mipmap.ic_fg_liu
+                                else R.mipmap.ic_fg_si
+                            )
                         }
                     }
 
@@ -445,7 +448,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "将删除学习进度、闯关成绩与成就记录，不可恢复",
+                                // 与弹窗里的 reset_confirm_message 保持一致：
+                                // resetAll() 会 prefs.clear()，应用设置（级别、目标、语速、
+                                // 图标、明暗模式）也会被一并清掉，这里不能只说学习数据。
+                                text = "将删除学习进度、闯关成绩、成就记录与应用设置，不可恢复",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -826,9 +832,14 @@ private fun DefaultIconPreview() {
     }
 }
 
-/** 简洁图标预览：橙底白字，直接画出与桌面图标一致的字形。 */
+/**
+ * 简洁图标预览：橙底白字，字形直接铺桌面图标同一个前景 PNG
+ * （mipmap/ic_fg_si 或 ic_fg_liu），保证预览与桌面所见完全一致。
+ * ⚠️ 别再退回 Text 画字：系统默认字体与桌面图标生成用的书法字体
+ * （华文行楷）不是一回事，预览会和桌面「两张脸」（v1.3.0 的教训）。
+ */
 @Composable
-private fun SimpleIconPreview(char: String) {
+private fun SimpleIconPreview(foregroundRes: Int) {
     Box(
         modifier = Modifier
             .size(56.dp)
@@ -836,11 +847,11 @@ private fun SimpleIconPreview(char: String) {
             .background(Color(0xFFE2703A)),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = char,
-            fontSize = 30.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
+        Image(
+            painter = painterResource(foregroundRes),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(48.dp)
         )
     }
 }

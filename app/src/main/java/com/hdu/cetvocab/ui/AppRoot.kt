@@ -1,6 +1,7 @@
 package com.hdu.cetvocab.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -23,9 +24,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -74,6 +78,61 @@ private val TAB_ROUTES = TABS.map { it.route }.toSet()
 private fun NavBackStackEntry?.isTab(): Boolean =
     this?.destination?.route in TAB_ROUTES
 
+/**
+ * 两端都是标签时为 true，此时按左右次序做滑动转场。
+ *
+ * 名字不叫 `and`：`and` 在 Kotlin 里是 `Boolean` 上的 infix 函数名，
+ * 自定义同名函数必须补 `infix` 修饰符才行，容易踩坑。
+ */
+private fun bothTabs(a: NavBackStackEntry?, b: NavBackStackEntry?): Boolean =
+    a.isTab() && b.isTab()
+
+/**
+ * 底部标签之间的左右滑动手势：手指向左滑看右边的标签，向右滑看左边的标签。
+ *
+ * 只在容器层挂一次，不给每个页面各写一遍 —— 导航状态只有这里知道，
+ * 而且二级页本身就不该响应（它有「返回」语义，再叠横滑切页会误触）。
+ *
+ * 判定用**整轮手势的累计位移**而不是单帧速度：
+ * - 阈值 72dp（约屏宽 1/15），长按后小幅抖动不会触发；
+ * - 一轮手势只触发一次（[fired]），否则一次长滑会连跳好几页；
+ * - 用 `detectHorizontalDragGestures` 而不是裸 `pointerInput`：
+ *   它内部先做方向抢占，竖向列表滚动时不会把手势抢走。
+ *
+ * 目标页由 [goTab] 统一跳转 —— 方向和导航必须一起走，否则会退回
+ * 「按 NavController 内部判断」那条会出错的路（详见 [AppRoot] 里的说明）。
+ *
+ * @param index 当前所在标签的序号；传 -1（当前是二级页）时不挂手势
+ */
+private fun Modifier.tabSwipe(index: Int, goTab: (Int) -> Unit): Modifier {
+    if (index < 0) return this
+    return pointerInput(index) {
+        val threshold = 72.dp.toPx()
+        var total = 0f
+        var fired = false
+        fun reset() { total = 0f; fired = false }
+        detectHorizontalDragGestures(
+            onDragStart = { reset() },
+            onDragEnd = { reset() },
+            onDragCancel = { reset() },
+            onHorizontalDrag = { _, dragAmount ->
+                if (fired) return@detectHorizontalDragGestures
+                total += dragAmount
+                // 向左滑（位移为负）→ 看右边的标签；向右滑 → 看左边的标签
+                val target = when {
+                    total <= -threshold -> index + 1
+                    total >= threshold -> index - 1
+                    else -> -1
+                }
+                if (target in TABS.indices) {
+                    fired = true
+                    goTab(target)
+                }
+            }
+        )
+    }
+}
+
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
     val context = LocalContext.current
@@ -101,6 +160,32 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
     val showBar = TABS.any { it.route == route }
+    val tabIndex = TABS.indexOfFirst { it.route == route }
+
+    /*
+     * 本次标签切换的滑动方向：`1` 目标在右侧（内容从右往左推），`-1` 目标在左侧。
+     *
+     * 为什么必须由「用户点了哪个标签」在导航**之前**算好，而不是在转场 lambda 里
+     * 用 NavController 给的 initialState / targetState 反推：
+     * 底部标签用 `popUpTo(HOME) + restoreState` 切换，跨多级跳转（我的 → 词库）
+     * 在 NavController 内部会被拆成两段 —— 先 pop 回首页、再 navigate 到词库。
+     * 于是用户看到的不是「词库从左边滑进来」，而是「首页一闪，词库再从右边滑进来」，
+     * 方向和预期正好相反。这种错乱只在跨越了中间标签时才出现，所以是「偶有几页」。
+     *
+     * 自己按用户意图定方向，就与 NavController 内部怎么拆无关了。
+     */
+    var swipeDir by remember { mutableIntStateOf(1) }
+
+    /** 切到第 index 个标签：先定方向，再导航。两者必须是一个动作。 */
+    fun goTab(index: Int) {
+        if (index !in TABS.indices || index == tabIndex) return
+        if (tabIndex >= 0) swipeDir = index.compareTo(tabIndex)
+        nav.navigate(TABS[index].route) {
+            popUpTo(Routes.HOME) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
 
     LaunchedEffect(Unit) { vm.refreshAll() }
 
@@ -119,18 +204,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 0.dp
                 ) {
-                    TABS.forEach { tab ->
+                    TABS.forEachIndexed { i, tab ->
                         NavigationBarItem(
                             selected = route == tab.route,
-                            onClick = {
-                                if (route != tab.route) {
-                                    nav.navigate(tab.route) {
-                                        popUpTo(Routes.HOME) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                }
-                            },
+                            onClick = { goTab(i) },
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
                             label = { Text(tab.label) },
                             colors = NavigationBarItemDefaults.colors(
@@ -146,12 +223,16 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
             }
         }
     ) { padding ->
+        // 横滑切标签的手势挂在容器层而不是各个页面：
+        // 只有这里同时知道「当前是第几个标签」和 NavController，
+        // 且二级页（学习 / 详情 / 设置）不该响应横滑，交给 AppNavHost 内部会一视同仁。
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .tabSwipe(tabIndex, ::goTab)
         ) {
-            AppNavHost(nav, vm, speech::speak, speech::speakAuto)
+            AppNavHost(nav, vm, swipeDir, ::goTab, speech::speak, speech::speakAuto)
         }
     }
 }
@@ -160,6 +241,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 private fun AppNavHost(
     nav: NavHostController,
     vm: AppViewModel,
+    swipeDir: Int,
+    goTab: (Int) -> Unit,
     speak: (String) -> Unit,
     speakAuto: (String) -> Unit
 ) {
@@ -169,29 +252,30 @@ private fun AppNavHost(
         /*
          * 转场策略：按「两个页面是不是同一层」二分，而不是给每个页面写死一套。
          *
-         * - 两端都是底部标签 → 平行转场（淡入淡出 + 轻微缩放），不表达方向；
+         * - 两端都是底部标签 → 左右滑动，方向取 [swipeDir]（由用户点了哪个标签决定）。
+         *   四个标签横向排列，用户对手势方向有明确预期，滑动的方向感才对得上。
          * - 只要有一端不是标签（二级页 / 学习页 / 单词详情）→ 层级推进，
          *   新页从右侧滑入，旧页只左移 1/4 屏并缩小变暗，形成前后景视差。
          *
-         * 之所以四条转场都判 `initialState.isTab() && targetState.isTab()`：
-         * 底部标签用 `popUpTo(HOME) + restoreState` 切换，从「我的」回「首页」
-         * 在 NavController 眼里是一次 **pop** 而不是 navigate，如果只按 navigate 判，
-         * 同一组标签之间来回切会一会儿滑、一会儿淡，方向感是乱的。
+         * 四条转场都读同一个 [swipeDir]、都判「两端是否都是标签」：
+         * 底部标签用 `popUpTo(HOME) + restoreState` 切换，同一组标签之间来回切，
+         * NavController 有时判成 navigate、有时判成 pop，走哪条分支并不固定。
+         * 只要分支判断一致、方向同源，观感就是连续的。
          */
         enterTransition = {
-            if (initialState.isTab() && targetState.isTab()) Motion.parallelEnter()
+            if (bothTabs(initialState, targetState)) Motion.slideEnter(swipeDir >= 0)
             else Motion.pushEnter()
         },
         exitTransition = {
-            if (initialState.isTab() && targetState.isTab()) Motion.parallelExit()
+            if (bothTabs(initialState, targetState)) Motion.slideExit(swipeDir >= 0)
             else Motion.pushExit()
         },
         popEnterTransition = {
-            if (initialState.isTab() && targetState.isTab()) Motion.parallelEnter()
+            if (bothTabs(initialState, targetState)) Motion.slideEnter(swipeDir >= 0)
             else Motion.popEnter()
         },
         popExitTransition = {
-            if (initialState.isTab() && targetState.isTab()) Motion.parallelExit()
+            if (bothTabs(initialState, targetState)) Motion.slideExit(swipeDir >= 0)
             else Motion.popExit()
         }
     ) {
@@ -244,24 +328,15 @@ private fun AppNavHost(
                 onOpenAchievements = { nav.navigate(Routes.ACHIEVEMENTS) },
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) },
                 // 拓展资源练习：入口在「我的」页，但答题界面复用闯关页。
-                // 先让 ViewModel 装好对应题库，再跳到闯关标签 ——
-                // 导航选项与底部标签点击**完全一致**（popUpTo(HOME) + saveState），
-                // 否则从「我的」跳过去会在返回栈里多压一层，返回行为与切标签不一样。
+                // 先让 ViewModel 装好对应题库，再用 goTab 跳到闯关标签 ——
+                // 与底部标签点击走同一条路径，返回栈与滑动方向才都一致。
                 onOpenConfusable = {
                     vm.startConfusableQuiz()
-                    nav.navigate(Routes.QUIZ) {
-                        popUpTo(Routes.HOME) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
+                    goTab(TABS.indexOfFirst { it.route == Routes.QUIZ })
                 },
                 onOpenTranslation = {
                     vm.startTranslationQuiz()
-                    nav.navigate(Routes.QUIZ) {
-                        popUpTo(Routes.HOME) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
+                    goTab(TABS.indexOfFirst { it.route == Routes.QUIZ })
                 }
             )
         }

@@ -1,5 +1,10 @@
 package com.hdu.cetvocab.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,10 +35,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +64,7 @@ import com.hdu.cetvocab.ui.components.LevelDots
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import com.hdu.cetvocab.ui.theme.Motion
 import kotlinx.coroutines.launch
 
 @Composable
@@ -70,8 +76,10 @@ fun LearnScreen(
     onStartWrong: () -> Unit
 ) {
     val state by vm.learn.collectAsState()
-    var tab by remember { mutableIntStateOf(0) }
-    var showingAllWords by remember { mutableStateOf(false) }
+    // 用 rememberSaveable：切到后台被系统回收后重建时，用户仍停在原来那个分段
+    // 和「全部单词」浏览态，而不是被悄悄弹回单元列表。
+    var tab by rememberSaveable { mutableStateOf(0) }
+    var showingAllWords by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // ---------- 顶部：阶段 + 搜索 ----------
@@ -85,35 +93,55 @@ fun LearnScreen(
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "共 ${state.totalWords} 词 · 已学 ${state.learnedWords} 词 · 每单元 50 词",
+                        // 不再写死「每单元 50 词」：末单元只装得下余数（实测四级末单元 48 词），
+                        // 写死会与下面的单元列表对不上。改为直接报真实单元数。
+                        text = "共 ${state.totalWords} 词 · 已学 ${state.learnedWords} 词 · " +
+                            "${state.units.size} 个单元",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
             Spacer(Modifier.height(10.dp))
-            AppCard(color = LocalAppColors.current.cardPeach, padding = 14.dp) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "预览全部单词",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            text = "像好友列表一样按字母快速浏览 ${state.totalWords} 个词",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+            // 进入「预览全部」后这张卡本身就没意义了 —— 用户已经在预览全部里，
+            // 提示「点浏览全部去看全词表」是让人绕出去。
+            // 搜索框仍保留，用户可以从这里直接搜某个单词跳到详情。
+            AnimatedVisibility(
+                visible = !showingAllWords,
+                // 高度塌陷要有一个明确方向：卡片从底部消失、从顶部冒出，
+                // 配合淡入淡出，比单纯 fade 更像「抽走一张纸」。
+                enter = fadeIn(Motion.effects()) +
+                    expandVertically(Motion.spatial(), expandFrom = Alignment.Top),
+                exit = fadeOut(Motion.effects()) +
+                    shrinkVertically(Motion.spatial(), shrinkTowards = Alignment.Top),
+                label = "previewAllCard"
+            ) {
+                Column {
+                    AppCard(color = LocalAppColors.current.cardPeach, padding = 14.dp) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "预览全部单词",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    text = "像好友列表一样按字母快速浏览 ${state.totalWords} 个词",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Button(onClick = {
+                                showingAllWords = true
+                                vm.previewAllWords()
+                            }) {
+                                Text(stringResource(R.string.action_browse_all))
+                            }
+                        }
                     }
-                    Button(onClick = {
-                        showingAllWords = true
-                        vm.previewAllWords()
-                    }) {
-                        Text(stringResource(R.string.action_browse_all))
-                    }
+                    Spacer(Modifier.height(10.dp))
                 }
             }
             Spacer(Modifier.height(10.dp))

@@ -20,6 +20,19 @@ enum class Tier(val label: String, val minWords: Int) {
     fun wordsToNext(learnedWords: Int): Int =
         next?.let { (it.minWords - learnedWords).coerceAtLeast(0) } ?: 0
 
+    /**
+     * 在「当前段位 → 下一段位」区间内的进度比例（0..1）。
+     *
+     * 用于段位卡片底部那条进度条。已是最高段位时返回 1f 让条填满。
+     * 青铜是最低段、没有上一段，进度从 0 词起算；其它段位的起点是上一段的 minWords。
+     */
+    fun progressToNext(learnedWords: Int): Float {
+        val nextTier = next ?: return 1f
+        val prevMin = values().getOrNull(ordinal - 1)?.minWords ?: 0
+        val span = (nextTier.minWords - prevMin).coerceAtLeast(1)
+        return ((learnedWords - prevMin).toFloat() / span).coerceIn(0f, 1f)
+    }
+
     companion object {
         /**
          * 按已学词数取段位。

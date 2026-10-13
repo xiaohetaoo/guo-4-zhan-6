@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
 
 private val WarmLightColors = lightColorScheme(
@@ -87,7 +88,21 @@ fun CetVocabTheme(
             // 这个 context 未必就是 Activity，强转会抛 ClassCastException 而崩溃。
             // 这里沿 ContextWrapper 链向上找，找不到就安静跳过状态栏设置。
             val activity = view.context.findActivity() ?: return@SideEffect
-            WindowCompat.getInsetsController(activity.window, view).isAppearanceLightStatusBars = !darkTheme
+            val window = activity.window
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.isAppearanceLightStatusBars = !darkTheme
+            // 导航栏此前漏了这一句：只改状态栏图标、不改导航栏图标，
+            // 深色主题下导航栏是深底 + 深色手势条，基本看不见。
+            controller.isAppearanceLightNavigationBars = !darkTheme
+
+            // 系统栏**底色**必须由 Compose 侧显式覆盖，不能只依赖 XML 主题。
+            // themes.xml 里的 @color/warm_* 是按「系统 uiMode」解析的，而
+            // MainActivity 声明了 configChanges="uiMode" —— 系统深浅色变化时
+            // Activity 不重建、XML 也不重新解析。于是「系统是深色 + 用户在设置里
+            // 把应用固定为浅色」就会渲染成：浅色界面 + 深色状态栏 + 深色图标，
+            // 图标与底色同色，等于不可读。这里跟着应用自身的深浅色走。
+            window.statusBarColor = colorScheme.background.toArgb()
+            window.navigationBarColor = colorScheme.surface.toArgb()
         }
     }
 

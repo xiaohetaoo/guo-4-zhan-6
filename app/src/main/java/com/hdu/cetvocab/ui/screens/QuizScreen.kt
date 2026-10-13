@@ -46,6 +46,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -111,6 +112,17 @@ fun QuizScreen(
 
     LaunchedEffect(state.active) {
         if (!state.active) vm.refreshLearn()
+    }
+
+    // 离开闯关页时停表。闯关页本身是底部标签之一，用户可以直接点别的标签切走 ——
+    // 这时应用并没有退到后台，MainActivity.onStop 不会触发，若不在这里停表，
+    // 用户在别的页面停留的这段时间会被算进「本关用时」，排行榜里的用时因此虚高。
+    // 回到本页时由 onAppForeground 之外的路径恢复：见下方 LaunchedEffect。
+    DisposableEffect(Unit) {
+        onDispose { vm.onQuizScreenExit() }
+    }
+    LaunchedEffect(state.active, state.finished) {
+        if (state.active && !state.finished) vm.onQuizScreenEnter()
     }
 
     // 拦截系统返回键。
@@ -613,20 +625,34 @@ private fun QuizPlay(
         }
 
         Column(modifier = Modifier.padding(16.dp)) {
+            /*
+             * 选义 / 易混词辨析题的判分时机与另外两种题型不同：
+             * 点选项（OptionRow -> vm.selectOption）当场就判分并揭晓，
+             * 因此不存在「选中了但还没提交」这个中间态 ——
+             * `state.selected >= 0` 必然蕴含 `state.revealed`。
+             *
+             * 历史实现在这里写了一个 `else -> vm.selectOption(state.selected)` 分支，
+             * 它永远不可达：按钮 enabled 的前提（selected >= 0）成立时 revealed 已为 true，
+             * onClick 早在第一个分支就 nextQuestion 了。留着只会让人误以为
+             * 这两类题也有「先选后交」的流程。这里显式收敛成「未揭晓时禁用」，
+             * 文案也相应改成引导语，而不是一个永远点不动的「提交答案」。
+             */
+            val canSubmit = when {
+                state.revealed -> true
+                q.kind == QuizKind.SPELLING -> true
+                q.kind == QuizKind.TRANSLATION -> state.selectedSet.isNotEmpty()
+                else -> false
+            }
             Button(
                 onClick = {
-                    if (state.revealed) vm.nextQuestion()
-                    else when (q.kind) {
-                        QuizKind.SPELLING -> vm.submitSpelling()
-                        QuizKind.TRANSLATION -> vm.submitTranslation()
-                        else -> if (state.selected >= 0) vm.selectOption(state.selected)
+                    when {
+                        state.revealed -> vm.nextQuestion()
+                        q.kind == QuizKind.SPELLING -> vm.submitSpelling()
+                        q.kind == QuizKind.TRANSLATION -> vm.submitTranslation()
+                        else -> Unit
                     }
                 },
-                enabled = state.revealed || when (q.kind) {
-                    QuizKind.SPELLING -> true
-                    QuizKind.TRANSLATION -> state.selectedSet.isNotEmpty()
-                    else -> state.selected >= 0
-                },
+                enabled = canSubmit,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -636,10 +662,13 @@ private fun QuizPlay(
                 )
             ) {
                 Text(
-                    text = if (state.revealed) {
-                        if (state.index + 1 >= state.total) "查看成绩" else "下一题"
-                    } else if (q.kind == QuizKind.TRANSLATION) "提交所选译法"
-                    else "提交答案",
+                    text = when {
+                        state.revealed ->
+                            if (state.index + 1 >= state.total) "查看成绩" else "下一题"
+                        q.kind == QuizKind.TRANSLATION -> "提交所选译法"
+                        q.kind == QuizKind.SPELLING -> "提交答案"
+                        else -> "请先选择答案"
+                    },
                     fontWeight = FontWeight.SemiBold
                 )
             }

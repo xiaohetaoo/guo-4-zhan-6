@@ -72,9 +72,14 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         vm.onAppBackground()
         val app = application as CetVocabApp
-        // 放到后台线程执行：写组件状态是跨进程调用，不宜占用主线程
+        // 放到后台线程执行：写组件状态是跨进程调用，不宜占用主线程。
+        //
+        // 这里传 app（Application）而不是 this@MainActivity：appScope 的生命周期
+        // 与应用进程等长，把 Activity 引用塞进它启动的协程，就等于让 Activity
+        // 在任务栈销毁后仍被协程闭包持有 —— 一次有界但真实的泄漏。
+        // LauncherIcons 只需要 Context 拿 PackageManager，Application 完全够用。
         app.appScope.launch {
-            runCatching { LauncherIcons.apply(this@MainActivity, app.repo.iconStyle, app.repo.stage) }
+            runCatching { LauncherIcons.apply(app, app.repo.iconStyle, app.repo.stage) }
         }
     }
 }

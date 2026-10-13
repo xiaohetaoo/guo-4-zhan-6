@@ -76,9 +76,8 @@ object Motion {
     /**
      * 平行转场 · 进入：淡入 + 从 94% 放大到 100%。
      *
-     * 底部标签之间是**并列关系**，没有「谁在谁上面」，所以不能用左右滑动去暗示层级，
-     * 否则方向感是错的（从「我的」切到「首页」时往左滑，逻辑上说不通）。
-     * 用「淡入 + 轻微放大」表达「同一层的内容换了一批」。
+     * 表达「同一层的内容换了一批」而不暗示方向，适合无法确定左右次序的场合。
+     * 底部标签之间的切换已改用带方向的 [slideEnter]，本函数保留给其它平行场景。
      */
     fun parallelEnter(): EnterTransition =
         fadeIn(effects()) + scaleIn(initialScale = 0.94f, animationSpec = spatial())
@@ -86,6 +85,27 @@ object Motion {
     /** 平行转场 · 退出：淡出 + 放大到 104%，与进入形成对称的「推拉」。 */
     fun parallelExit(): ExitTransition =
         fadeOut(effects()) + scaleOut(targetScale = 1.04f, animationSpec = spatial())
+
+    /**
+     * 平行转场 · 带方向的左右滑动 · 进入。
+     *
+     * 底部四个标签虽然彼此并列、没有层级，但横向排列本身就有次序，
+     * 用户点右侧的标签时期待内容「从右边来」，反之亦然 —— 这是手指的直觉。
+     * 因此这里按序号增减决定方向，而不是像层级推进那样永远从右侧进。
+     *
+     * 位移取整屏、并叠一层淡入：整屏平移若不淡入，两页交界的那一帧会出现
+     * 硬边，看起来像「抽」了一下；淡入把交界柔化掉。
+     *
+     * @param forward true 表示目标在右侧（新页从右进），false 表示目标在左侧
+     */
+    fun slideEnter(forward: Boolean): EnterTransition =
+        slideInHorizontally(animationSpec = spatial()) { if (forward) it else -it } +
+            fadeIn(effects())
+
+    /** 平行转场 · 带方向的左右滑动 · 退出：旧页朝新页的反方向让位，两者同步平移。 */
+    fun slideExit(forward: Boolean): ExitTransition =
+        slideOutHorizontally(animationSpec = spatial()) { if (forward) -it else it } +
+            fadeOut(effects())
 
     /**
      * 层级推进 · 进入二级页：新页从右侧滑入 + 淡入。

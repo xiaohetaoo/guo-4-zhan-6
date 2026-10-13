@@ -1,5 +1,6 @@
 package com.hdu.cetvocab.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
@@ -92,6 +93,13 @@ fun StudyScreen(
         vm.onStudyScreenEnter()
         onDispose { vm.onStudyScreenExit() }
     }
+
+    // 拦截系统返回键，统一走 onFinish。
+    // 此前没有拦截：按返回键会直接 pop，但 vm.finishStudy() 不会被调用 ——
+    // 学习态残留、首页/词库/我的三页数据都不刷新，
+    // 下次进入学习页还会看到上一次「本组学习完成」的结算页。
+    // 页面顶部的关闭按钮走的是 onFinish，两条退出路径现在行为一致。
+    BackHandler { onFinish() }
 
     // 切换单词时自动发音：走 speakAuto 入口，内部统一遵守「自动朗读」开关
     LaunchedEffect(state.index, state.finished) {
