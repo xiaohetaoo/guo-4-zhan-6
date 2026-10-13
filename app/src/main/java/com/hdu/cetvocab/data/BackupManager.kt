@@ -28,7 +28,7 @@ class BackupManager(
 ) {
 
     private val prefs: SharedPreferences =
-        context.getSharedPreferences("vocab_meta", Context.MODE_PRIVATE)
+        context.getSharedPreferences(WordDb.PREFS_NAME, Context.MODE_PRIVATE)
 
     // 用 DateTimeFormatter 而不是 SimpleDateFormat：前者不可变、线程安全，
     // 可以安全地作为字段复用。SimpleDateFormat 非线程安全，多线程并发导出时
@@ -39,6 +39,24 @@ class BackupManager(
     private val timeText = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
     private fun stamp(): String = fileStamp.format(LocalDateTime.now())
+
+    /**
+     * 生成目录内不重名的文件。
+     *
+     * 时间戳只到秒，同一秒内的两次操作（快速连点、或脚本批量导出）会算出同一个路径，
+     * 而 `writeText` 是先 truncate 再写、并非原子操作 —— 轻则静默覆盖一份备份，
+     * 重则两个写线程交错出一个「半截 JSON」，而它还会出现在 listBackups() 里
+     * 被当成可恢复的备份。这里遇到重名就追加序号，保证每次落盘都是独立文件。
+     */
+    private fun uniqueFile(dir: File, base: String, ext: String): File {
+        var index = 1
+        while (true) {
+            val name = if (index == 1) "$base.$ext" else "$base($index).$ext"
+            val file = File(dir, name)
+            if (!file.exists()) return file
+            index++
+        }
+    }
 
     /** 每个目录最多保留的历史文件数，超出的按时间从旧到新删除 */
     private val keepPerDir = 20
@@ -64,22 +82,34 @@ class BackupManager(
 
     /** 导出全部学习记录，一行一个单词状态 */
     fun exportStudyCsv(): File {
-        val file = File(exportDir(), "学习记录_${stamp()}.csv")
-        val sb = StringBuilder()
-        sb.append("word,level,wrong_count,fav,last_study,next_review\n")
+        val file = uniqueFile(exportDir(), "学习记录_${stamp()}", "csv")
+        // 单趟把行读进内存（每行 6 个数值，最多数千行），再一次性批量取词名。
+        // 早期实现是每行调一次 wordDb.wordById()，上万条状态时导出要走上万次
+        // rawQuery（每次还映射 15 列），导出会明显卡住。
+        data class Row(val wordId: Int, val level: Int, val wrong: Int, val fav: Int,
+                       val lastTs: Long, val nextTs: Long)
+        val rows = ArrayList<Row>()
         userDb.readableDatabase.rawQuery(
             "SELECT word_id,level,wrong_count,fav,last_ts,next_review_ts " +
                 "FROM word_state ORDER BY last_ts DESC", null
         ).use { c ->
             while (c.moveToNext()) {
-                val word = wordDb.wordById(c.getInt(0))?.word ?: "#${c.getInt(0)}"
-                sb.append(csvCell(word)).append(',')
-                    .append(c.getInt(1)).append(',')
-                    .append(c.getInt(2)).append(',')
-                    .append(c.getInt(3)).append(',')
-                    .append(csvCell(formatTs(c.getLong(4)))).append(',')
-                    .append(csvCell(formatTs(c.getLong(5)))).append('\n')
+                rows.add(Row(c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3),
+                    c.getLong(4), c.getLong(5)))
             }
+        }
+        val wordsById = HashMap<Int, String>()
+        wordDb.wordsByIds(rows.map { it.wordId }).forEach { wordsById[it.id] = it.word }
+
+        val sb = StringBuilder()
+        sb.append("word,level,wrong_count,fav,last_study,next_review\n")
+        rows.forEach { r ->
+            sb.append(csvCell(wordsById[r.wordId] ?: "#${r.wordId}")).append(',')
+                .append(r.level).append(',')
+                .append(r.wrong).append(',')
+                .append(r.fav).append(',')
+                .append(csvCell(formatTs(r.lastTs))).append(',')
+                .append(csvCell(formatTs(r.nextTs))).append('\n')
         }
         file.writeText(sb.toString())
         prune(exportDir(), ".csv")
@@ -88,7 +118,7 @@ class BackupManager(
 
     /** 导出收藏的单词本，按字母序 */
     fun exportFavCsv(): File {
-        val file = File(exportDir(), "单词本_${stamp()}.csv")
+        val file = uniqueFile(exportDir(), "单词本_${stamp()}", "csv")
         val favIds = ArrayList<Int>()
         userDb.readableDatabase.rawQuery(
             "SELECT word_id FROM word_state WHERE fav=1", null
@@ -112,9 +142,9 @@ class BackupManager(
 
     /** 备份全部用户数据为单个 JSON 文件 */
     fun backupJson(): File {
-        val file = File(backupDir(), "cetvocab_backup_${stamp()}.json")
+        val file = uniqueFile(backupDir(), "${BACKUP_PREFIX}${stamp()}", "json")
         val root = JSONObject()
-        root.put("app", "过四斩六")
+        root.put(KEY_APP, APP_ID)
         root.put("db_version", UserDb.DB_VERSION)
         root.put("exported_at", System.currentTimeMillis())
 
@@ -212,7 +242,9 @@ class BackupManager(
 
     /** 列出备份目录下所有 JSON 备份，最新的在前 */
     fun listBackups(): List<File> =
-        backupDir().listFiles { f -> f.isFile && f.name.endsWith(".json", ignoreCase = true) }
+        backupDir().listFiles { f ->
+            f.isFile && f.name.startsWith(BACKUP_PREFIX) && f.name.endsWith(".json", ignoreCase = true)
+        }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
 
@@ -236,7 +268,17 @@ class BackupManager(
     fun restore(file: File): RestoreReport {
         val root = JSONObject(file.readText())
 
-        // ---------- 1. 校验：不通过则直接抛出，此时尚未触碰任何现有数据 ----------
+        // ---------- 1. 校验：不通过则直接抛出，此时一行数据都还没删 ----------
+        // 必须是「本产品导出的备份」，而不是目录下随便一个 JSON。
+        // 只校验版本号是不够的：缺 db_version 字段的 JSON 会被 optInt 读成 0，
+        // 照样通过 `0 <= DB_VERSION`，然后后面的 DELETE 就会把五张表清空、
+        // 再插入 0 行 —— 用户进度、成绩、成就全灭，界面却提示「恢复成功」。
+        require(root.optString(KEY_APP) == APP_ID) {
+            "「${file.name}」不是「过四斩六」的备份文件，已中止恢复（现有数据未做任何改动）"
+        }
+        require(root.has("word_state") && root.has("study_log") && root.has("quiz_record")) {
+            "「${file.name}」缺少必要的备份数据段，可能已损坏，已中止恢复（现有数据未做任何改动）"
+        }
         val backupVersion = root.optInt("db_version", 0)
         require(backupVersion <= UserDb.DB_VERSION) {
             "备份来自更新的应用版本（备份 v$backupVersion，当前 v${UserDb.DB_VERSION}），请先升级应用再恢复"
@@ -314,16 +356,23 @@ class BackupManager(
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
             }
-            root.optJSONArray("achievement").objects().forEach { o ->
-                db.insertWithOnConflict(
-                    "achievement", null,
-                    ContentValues().apply {
-                        put("code", o.optString("code"))
-                        put("unlocked_ts", o.optLong("unlocked_ts"))
-                    },
-                    SQLiteDatabase.CONFLICT_REPLACE
-                )
-            }
+            // 成就码必须过一遍当前版本的定义表再回填。
+            // word_state / study_log 都做了有效性校验，成就却原样接收任意 code：
+            // 恢复带回当前版本没有的成就码时，成就墙会显示「已解锁 100 / 81 个成就」，
+            // 而进度条用的 fraction 大于 1 会直接触发 require 断言崩溃。
+            val knownCodes = Achievements.ALL.mapTo(HashSet()) { it.code }
+            root.optJSONArray("achievement").objects()
+                .filter { it.optString("code") in knownCodes }
+                .forEach { o ->
+                    db.insertWithOnConflict(
+                        "achievement", null,
+                        ContentValues().apply {
+                            put("code", o.optString("code"))
+                            put("unlocked_ts", o.optLong("unlocked_ts"))
+                        },
+                        SQLiteDatabase.CONFLICT_REPLACE
+                    )
+                }
             root.optJSONArray("app_meta").objects().forEach { o ->
                 db.insertWithOnConflict(
                     "app_meta", null,
@@ -404,6 +453,13 @@ class BackupManager(
         }
 
     companion object {
+        /** 备份文件的身份标识字段与取值：恢复时据此判断「这是不是本产品的备份」 */
+        private const val KEY_APP = "app"
+        private const val APP_ID = "过四斩六"
+
+        /** 备份文件名前缀，[listBackups] 据此过滤，避免把目录里其它 .json 当成备份 */
+        private const val BACKUP_PREFIX = "cetvocab_backup_"
+
         private const val KEY_STAGE = "stage"
         private const val KEY_GOAL = "daily_goal"
         private const val KEY_AUTOSPEAK = "auto_speak"

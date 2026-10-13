@@ -13,7 +13,9 @@ import com.hdu.cetvocab.data.QuizKind
 import com.hdu.cetvocab.data.QuizAggregate
 import com.hdu.cetvocab.data.QuizQuestion
 import com.hdu.cetvocab.data.QuizRecord
+import com.hdu.cetvocab.data.STAGE_QUIZ_COUNT
 import com.hdu.cetvocab.data.StudyOverview
+import com.hdu.cetvocab.data.UNIT_QUIZ_COUNT
 import com.hdu.cetvocab.data.VocabRepository
 import com.hdu.cetvocab.data.Word
 import com.hdu.cetvocab.data.WordDb
@@ -229,6 +231,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var studyScreenActive = false
     private var studyTimerStart = 0L
 
+    /**
+     * 学习时长结算时不足 1 秒的余数（毫秒）。
+     * 见 [flushStudyTimer]：整除会把每个片段的尾巴丢掉，高频进出会系统性少记。
+     */
+    private var studyTimerCarryMs = 0L
+
     val stage: Int get() = repo.stage
     val dailyGoal: Int get() = repo.dailyGoal
     val autoSpeak: Boolean get() = repo.autoSpeak
@@ -251,7 +259,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // 级别只读一次：中途被改会导致「按四级取 id、按六级算总数」这类口径不一致
                 val stage = repo.stage
                 val overview = repo.overview()
-                val due = repo.dueWords(40).size
+                // 待复习要取真实总数，不能用 dueWords(40).size：后者末尾是 take(40)，
+                // 到期词积压到上百个时首页会一直显示「待复习 40 词」，看不出欠了多少
+                val due = repo.dueCount()
                 val queue = repo.todayQueue()
                 // 「目前进度」只算当前级别：全局已学数会把另一个级别也算进来，不能直接用
                 val stageIds = repo.wordDb.idsOfStage(stage).toHashSet()
@@ -349,6 +359,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             finishing = false
             questionStartTs = 0L
             studyTimerStart = 0L
+            studyTimerCarryMs = 0L
+            studyScreenActive = false
+            quizScreenActive = false
             _study.value = StudyUiState()
             _quiz.value = QuizUiState()
             refreshAll()
@@ -440,8 +453,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _learn.update { it.copy(allWordsLoading = true, allWords = emptyList()) }
         viewModelScope.launch {
             val words = withContext(Dispatchers.IO) { repo.wordDb.wordsOfStage(stage) }
-            // 加载期间用户又切了级别：结果已过期，丢弃而不是覆盖新状态
-            if (repo.stage != stage) return@launch
+            // 加载期间用户又切了级别：结果已过期，丢弃而不是覆盖新状态。
+            // 丢弃时也必须把 allWordsLoading 落回 false —— 否则一旦这次过期返回是
+            // 在 refreshLearn 的合并之后到达，全词预览就永久转圈。
+            if (repo.stage != stage) {
+                _learn.update { if (it.stage != stage) it.copy(allWordsLoading = false) else it }
+                return@launch
+            }
             _learn.update {
                 it.copy(stage = stage, allWords = words, allWordsLoading = false)
             }
@@ -479,10 +497,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 背单词流程 ----------
 
-    fun startTodayStudy() {
+    /**
+     * 各个学习入口统一带一个 [onReady] 回调，**只有真的取到词了才让调用方跳转**。
+     *
+     * 此前是「先 navigate(STUDY)，再异步装队列」：
+     * · 生词本 / 错词本为空时，VM 里 `notify("还没有收藏的生词")` 直接 return，
+     *   可页面已经跳过去了，用户看到的是学习页上的「本组暂无单词」+ 一条提示；
+     * · 队列加载期间（冷启动首次还要拷词库）学习页会先闪一下空态。
+     * 回调在主线程触发（viewModelScope 默认 Main.immediate），可以安全地拿它做导航。
+     */
+    fun startTodayStudy(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val queue = withContext(Dispatchers.IO) { repo.todayQueue() }
-            startQueue("今日学习", queue)
+            startQueue("今日学习", queue, onReady)
         }
     }
 
@@ -490,45 +517,48 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 今日目标完成后的「继续学习」：先还清到期复习，再预学一批新词（超前学习）。
      * 与「开始今日学习」共用同一套学习页与结算逻辑，只是取数口径不同。
      */
-    fun startExtraStudy() {
+    fun startExtraStudy(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val queue = withContext(Dispatchers.IO) { repo.extraQueue() }
-            startQueue("继续学习", queue)
+            startQueue("继续学习", queue, onReady)
         }
     }
 
-    fun startUnitStudy(unit: Int) {
+    fun startUnitStudy(unit: Int, onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val queue = withContext(Dispatchers.IO) { repo.unitWords(unit) }
-            startQueue("第 $unit 单元", queue)
+            startQueue("第 $unit 单元", queue, onReady)
         }
     }
 
-    fun startFavStudy() {
+    fun startFavStudy(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val queue = withContext(Dispatchers.IO) { repo.favWords() }
             if (queue.isEmpty()) {
                 notify("还没有收藏的生词")
+                onReady(false)
                 return@launch
             }
-            startQueue("生词本复习", queue)
+            startQueue("生词本复习", queue, onReady)
         }
     }
 
-    fun startWrongStudy() {
+    fun startWrongStudy(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val queue = withContext(Dispatchers.IO) { repo.wrongWords(50) }
             if (queue.isEmpty()) {
                 notify("暂时没有错词记录")
+                onReady(false)
                 return@launch
             }
-            startQueue("错词强化", queue)
+            startQueue("错词强化", queue, onReady)
         }
     }
 
-    private suspend fun startQueue(title: String, queue: List<Word>) {
+    private suspend fun startQueue(title: String, queue: List<Word>, onReady: (Boolean) -> Unit) {
         if (queue.isEmpty()) {
             notify("这里暂时没有需要学习的单词")
+            onReady(false)
             return
         }
         val favIds = withContext(Dispatchers.IO) {
@@ -541,6 +571,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             favIds = favIds,
             currentLevel = repo.userDb.stateOf(queue.first().id).level
         )
+        onReady(true)
     }
 
     fun flipCard() {
@@ -585,10 +616,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         unknownCount = s.unknownCount + if (known) 0 else 1,
                         currentLevel = if (done) s.currentLevel else nextWordLevel,
                         finished = done,
-                        newAchievements = if (done) gained else s.newAchievements
+                        // 整场累计的成就必须一路累加。此前写成
+                        // `if (done) gained else s.newAchievements`：未结束时不累加、
+                        // 结束时又用「最后一个单词那次评估的结果」整体覆盖，
+                        // 于是第 5 个、第 23 个词解锁的成就在结算页和提示里都看不到
+                        // （库里确实解锁了，纯粹是提示丢失）。
+                        newAchievements = s.newAchievements + gained
                     )
                 }
-                if (_study.value.finished) refreshHome()
+                if (_study.value.finished) {
+                    // 进入结算页即停表：结算页的停留时间不算学习时长，
+                    // 与闯关侧「结算页不计入本关用时」的口径保持一致。
+                    flushStudyTimer()
+                    refreshHome()
+                }
             } finally {
                 answering = false
             }
@@ -693,16 +734,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun resumeStudyTimer() {
-        if (studyScreenActive && studyTimerStart <= 0L) {
+        // 队列已空（本组完成 / 无词可学）时不起表：
+        // 结算页与空页的停留不该计入学习时长，口径与闯关侧一致。
+        if (studyScreenActive && studyTimerStart <= 0L && _study.value.current != null) {
             studyTimerStart = System.currentTimeMillis()
         }
     }
 
+    /**
+     * 结算并暂停学习时长计时。
+     *
+     * 用 [studyTimerCarryMs] 保存不足 1 秒的余数：此前每次结算都做 `(now - start) / 1000`
+     * 的整除，一个 40 秒的片段记 40 秒、0.9 秒的片段记 0 秒，用户高频进出学习页时
+     * 累计时长会系统性偏低。余数攒满 1 秒才落库，长期累计与真实时间一致。
+     */
     private fun flushStudyTimer() {
         val start = studyTimerStart
         studyTimerStart = 0L
         if (start <= 0L) return
-        val seconds = (System.currentTimeMillis() - start) / 1000
+        val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(0L) + studyTimerCarryMs
+        val seconds = elapsed / 1000
+        studyTimerCarryMs = elapsed % 1000
         if (seconds > 0) addStudySeconds(seconds)
     }
 
@@ -713,23 +765,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 闯关 ----------
 
+    /**
+     * 开局：装好题目、进入答题态，并把上一局的残留标志全部复位。
+     *
+     * [finishing] 必须在这里复位。它是 `finishQuiz()` 的幂等标志，过去的实现只在
+     * [exitQuiz] 里清零 —— 而结算页的「再来一局」是直接调 `start*Quiz`、不经过退出流程，
+     * 于是第二局答到最后一题时 `finishQuiz()` 一进门就被 `if (finishing) return` 拦掉：
+     * 成绩不入库、成就判不到、结算页不出现，界面死在最后一题（只能点 X 退出）。
+     * 把复位收敛到这一个开局入口，任何新的开局路径都不会再漏。
+     */
+    private fun openQuiz(
+        challengeStage: Int,
+        unit: Int,
+        questions: List<QuizQuestion>,
+        onReady: (Boolean) -> Unit = {}
+    ) {
+        finishJob?.cancel()
+        finishJob = null
+        finishing = false
+        _quiz.value = QuizUiState(
+            active = true,
+            stage = challengeStage,
+            unit = unit,
+            questions = questions
+        )
+        questionStartTs = System.currentTimeMillis()
+        onReady(true)
+    }
+
     fun startQuiz(unit: Int) {
         viewModelScope.launch {
             val challengeStage = repo.stage
             val questions = withContext(Dispatchers.IO) {
-                if (unit < 0) repo.buildStageQuiz(count = 30) else repo.buildQuiz(unit, 10)
+                if (unit < 0) repo.buildStageQuiz(count = STAGE_QUIZ_COUNT) else repo.buildQuiz(unit, UNIT_QUIZ_COUNT)
             }
             if (questions.isEmpty()) {
                 notify(if (unit < 0) "全词挑战暂不可用" else "该单元单词不足，换一个单元试试")
                 return@launch
             }
-            _quiz.value = QuizUiState(
-                active = true,
-                stage = challengeStage,
-                unit = unit,
-                questions = questions
-            )
-            questionStartTs = System.currentTimeMillis()
+            openQuiz(challengeStage, unit, questions)
         }
     }
 
@@ -740,21 +814,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 带形近词注解的词条，因此不需要「单词数不足」的前置判断——
      * 但仍保留了出题为 0 时的提示，避免数据库异常时静默进入空关卡。
      */
-    fun startConfusableQuiz() {
+    fun startConfusableQuiz(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val challengeStage = repo.stage
-            val questions = withContext(Dispatchers.IO) { repo.buildConfusableQuiz(10) }
+            val questions = withContext(Dispatchers.IO) { repo.buildConfusableQuiz(UNIT_QUIZ_COUNT) }
             if (questions.isEmpty()) {
                 notify("易混词辨析暂不可用")
+                onReady(false)
                 return@launch
             }
-            _quiz.value = QuizUiState(
-                active = true,
-                stage = challengeStage,
-                unit = QUIZ_SCOPE_CONFUSABLE,
-                questions = questions
-            )
-            questionStartTs = System.currentTimeMillis()
+            openQuiz(challengeStage, QUIZ_SCOPE_CONFUSABLE, questions, onReady)
         }
     }
 
@@ -762,21 +831,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 真题句子翻译专题：中文句 + 四个译文，选出全部可接受译法（多选）。
      * 题库按级别内置在词库里，六级与四级各自成卷。
      */
-    fun startTranslationQuiz() {
+    fun startTranslationQuiz(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val challengeStage = repo.stage
-            val questions = withContext(Dispatchers.IO) { repo.buildTranslationQuiz(10) }
+            val questions = withContext(Dispatchers.IO) { repo.buildTranslationQuiz(UNIT_QUIZ_COUNT) }
             if (questions.isEmpty()) {
                 notify("真题句子翻译题库暂不可用")
+                onReady(false)
                 return@launch
             }
-            _quiz.value = QuizUiState(
-                active = true,
-                stage = challengeStage,
-                unit = QUIZ_SCOPE_TRANSLATION,
-                questions = questions
-            )
-            questionStartTs = System.currentTimeMillis()
+            openQuiz(challengeStage, QUIZ_SCOPE_TRANSLATION, questions, onReady)
         }
     }
 
@@ -789,18 +853,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             val challengeStage = repo.stage
-            val questions = withContext(Dispatchers.IO) { repo.buildLetterQuiz(letter, 10) }
+            val questions = withContext(Dispatchers.IO) { repo.buildLetterQuiz(letter, UNIT_QUIZ_COUNT) }
             if (questions.isEmpty()) {
                 notify("「${letter.uppercaseChar()}」开头的单词不足，换一个字母试试")
                 return@launch
             }
-            _quiz.value = QuizUiState(
-                active = true,
-                stage = challengeStage,
-                unit = scope,
-                questions = questions
-            )
-            questionStartTs = System.currentTimeMillis()
+            openQuiz(challengeStage, scope, questions)
         }
     }
 
@@ -880,7 +938,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 推进到下一题（最后一题则进入结算）。
+     *
+     * **必须原子地抢占本题**：`onClick` 读的是组合时的快照，连点两下时两次都会带着
+     * 「已揭晓」的状态进来，索引会一次 +2，中间那道题直接被跳过。
+     * 这里先在 `update { }` 里把 `revealed` 抢下来 —— 只有抢到的一次才继续推进，
+     * 后一次看到的 `revealed` 已经是 false，直接返回。
+     * 与 [applyAnswer] 用 `revealed` 判重、[answerCurrent] 用 [answering] 串行是同一套思路。
+     */
     fun nextQuestion() {
+        var claimed = false
+        _quiz.update { s ->
+            if (s.active && s.revealed) {
+                claimed = true
+                s.copy(revealed = false)
+            } else s
+        }
+        if (!claimed) return
+
         // 先把本题用时结算进 elapsedMs，再推进
         val now = System.currentTimeMillis()
         val spent = if (questionStartTs > 0) (now - questionStartTs).coerceAtLeast(0) else 0L
@@ -928,6 +1004,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         finishJob = viewModelScope.launch {
             val gained = withContext(Dispatchers.IO) {
                 val record = repo.saveQuizRecord(
+                    // 用开局时记下的级别，而不是 repo.stage 实时值：
+                    // 答题中途切去别的标签改级别，会让入库级别与题目实际级别不一致
+                    stage = state.stage,
                     unit = state.unit,
                     mode = "mix",
                     score = state.score,
@@ -976,6 +1055,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _fileError = MutableStateFlow<String?>(null)
     val fileError: StateFlow<String?> = _fileError.asStateFlow()
 
+    /**
+     * 是否有文件任务正在进行。设置页据此禁用「导出 / 备份」四行。
+     *
+     * 没有这道闸时，ActionRow 连点两下会并发跑两个写盘任务：备份文件名只精确到秒，
+     * 同一秒内两次算出同一个路径，而 `writeText` 先 truncate 再写、不是原子操作，
+     * 两个线程交错就能写出一个半截 JSON —— 它还会出现在备份列表里被当成可恢复的备份。
+     */
+    private val _fileBusy = MutableStateFlow(false)
+    val fileBusy: StateFlow<Boolean> = _fileBusy.asStateFlow()
+
     fun consumeFileDone() {
         _fileDone.value = null
     }
@@ -985,10 +1074,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun runFileTask(title: String, block: () -> File) {
+        if (_fileBusy.value) return
+        _fileBusy.value = true
         viewModelScope.launch {
-            runCatching { withContext(Dispatchers.IO) { block() } }
-                .onSuccess { _fileDone.value = title to it.absolutePath }
-                .onFailure { _fileError.value = it.message ?: it.toString() }
+            try {
+                runCatching { withContext(Dispatchers.IO) { block() } }
+                    .onSuccess { _fileDone.value = title to it.absolutePath }
+                    .onFailure { _fileError.value = it.message ?: it.toString() }
+            } finally {
+                _fileBusy.value = false
+            }
         }
     }
 
@@ -1022,18 +1117,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 全局提示挂在 AppRoot 上，无论用户在哪一页都能看到。
      */
     fun restoreBackup(file: File) {
+        if (_fileBusy.value) return
+        _fileBusy.value = true
         viewModelScope.launch {
-            runCatching { withContext(Dispatchers.IO) { backup.restore(file) } }
-                .onSuccess { report ->
-                    refreshAll()
-                    notify(
-                        buildString {
-                            append("已从「${file.name}」恢复学习数据")
-                            if (report.skipped > 0) append("，跳过 ${report.skipped} 条失效记录")
-                        }
-                    )
-                }
-                .onFailure { _fileError.value = it.message ?: it.toString() }
+            try {
+                runCatching { withContext(Dispatchers.IO) { backup.restore(file) } }
+                    .onSuccess { report ->
+                        refreshAll()
+                        notify(
+                            buildString {
+                                append("已从「${file.name}」恢复学习数据")
+                                if (report.skipped > 0) append("，跳过 ${report.skipped} 条失效记录")
+                            }
+                        )
+                    }
+                    .onFailure { _fileError.value = it.message ?: it.toString() }
+            } finally {
+                _fileBusy.value = false
+            }
         }
     }
 
@@ -1063,8 +1164,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var leaderboardJob: Job? = null
+
     fun refreshLeaderboard() {
-        viewModelScope.launch {
+        // 与其它刷新器一样先取消上一个：并发跑时后完成的那个可能带着旧数据覆盖新结果
+        leaderboardJob?.cancel()
+        leaderboardJob = viewModelScope.launch {
             val data = withContext(Dispatchers.IO) {
                 repo.userDb.quizRecords(50) to repo.userDb.quizAggregate()
             }

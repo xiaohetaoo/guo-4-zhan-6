@@ -46,7 +46,7 @@ class VocabRepository(context: Context) {
 
     val wordDb = WordDb(context)
     val userDb = UserDb(context)
-    private val prefs = context.getSharedPreferences("vocab_meta", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(WordDb.PREFS_NAME, Context.MODE_PRIVATE)
 
     var stage: Int
         get() = prefs.getInt(KEY_STAGE, WordDb.STAGE_CET4)
@@ -168,6 +168,25 @@ class VocabRepository(context: Context) {
             .take(limit)
     }
 
+    /**
+     * 到期待复习词的**真实总数**，供首页「待复习 N 词」展示。
+     *
+     * 不能拿 `dueWords(40).size` 当总数：[dueWords] 末尾是 `.take(limit)`，
+     * 那是「取前 40 条」而不是「有 40 条」。到期词积压到上百个时，
+     * 首页会一直显示「待复习 40 词」，用户完全看不出欠了多少。
+     */
+    fun dueCount(): Int {
+        val now = System.currentTimeMillis()
+        val ids = userDb.states().values
+            .filter { it.level in 1..5 && it.nextReviewTs in 1..now }
+            .map { it.wordId }
+        if (ids.isEmpty()) return 0
+        // wordsByIds 内部分批（每批 500 个占位符），这里按各批命中数累加即为总数
+        return ids.chunked(ID_BATCH).sumOf { chunk ->
+            wordDb.wordsByIds(chunk).count { it.stage == stage }
+        }
+    }
+
     fun newWords(limit: Int): List<Word> {
         if (limit <= 0) return emptyList()
         val states = userDb.states()
@@ -202,8 +221,8 @@ class VocabRepository(context: Context) {
 
     fun wrongWords(limit: Int = 60): List<Word> {
         val ids = userDb.states().values
-            // 已经掌握（level 5）的词不再占用错词本，避免只增不减
-            .filter { it.wrongCount > 0 && it.level < 5 }
+            // 已答到「精通」档（LEVEL_EXPERT）的词不再占用错词本，避免只增不减
+            .filter { it.wrongCount > 0 && it.level < LEVEL_EXPERT }
             .sortedByDescending { it.wrongCount }
             .map { it.wordId }
             .take(limit)
@@ -215,8 +234,14 @@ class VocabRepository(context: Context) {
     fun buildQuiz(unit: Int, count: Int, spellingRatio: Float = 0.25f): List<QuizQuestion> =
         buildQuizFromPool(wordDb.wordsOfUnit(stage, unit), count, spellingRatio)
 
-    /** 全阶段挑战：从当前级别完整词库随机抽题，unit 以 -1 标记为全词挑战。 */
-    fun buildStageQuiz(count: Int = 30, spellingRatio: Float = 0.25f): List<QuizQuestion> =
+    /**
+     * 全阶段挑战：从当前级别完整词库随机抽题，unit 以 -1 标记为全词挑战。
+     *
+     * 题量取 50（原为 30）：全词挑战是唯一能拉长连击的关卡，
+     * 30 题时「单次闯关连对 50 题」（QUIZ_COMBO_50）在数学上不可能达成
+     * ——其余关卡都是 10 题。提到 50 题后这一档才有可达路径（需要 50 题全对）。
+     */
+    fun buildStageQuiz(count: Int = 50, spellingRatio: Float = 0.25f): List<QuizQuestion> =
         buildQuizFromPool(wordDb.wordsOfStage(stage), count, spellingRatio)
 
     /** 首字母挑战：从该首字母下的全部单词随机抽题（字母不分大小写）。 */
@@ -329,16 +354,20 @@ class VocabRepository(context: Context) {
                     if (distractors.size >= 3) break
                     if (used.add(candidate.translation)) distractors.add(candidate.translation)
                 }
-                // 极端情况下（同义释义过多）放宽唯一性，保证始终有 4 个选项
+                // 兜底：本级释义高度趋同（整批同义异形词）时，唯一释义可能凑不满 3 个。
+                // 这里放宽到「只要与正确答案不同」——宁可给出两个释义相同的干扰项，
+                // 也不要让一道题只剩 2–3 个选项（闯关页按 4 选项设计）。
+                // 早先这层兜底写的过滤条件与上面的循环等价，等于没有兜底。
                 if (distractors.size < 3) {
                     for (candidate in others) {
                         if (distractors.size >= 3) break
-                        if (candidate.translation != word.translation &&
-                            distractors.none { it == candidate.translation }
-                        ) distractors.add(candidate.translation)
+                        if (candidate.translation != word.translation) {
+                            distractors.add(candidate.translation)
+                        }
                     }
                 }
                 if (distractors.isEmpty()) return@map QuizQuestion(word, emptyList(), -1, true)
+                // 正确项必须参与打乱，否则答案位置会偏向某几号
                 val options = (distractors + word.translation).shuffled(random)
                 QuizQuestion(word, options, options.indexOf(word.translation), false)
             }
@@ -346,8 +375,16 @@ class VocabRepository(context: Context) {
         return questions
     }
 
+    /**
+     * 写入一局闯关成绩。
+     *
+     * `stage` 必须由调用方传入**开局时的级别**（[com.hdu.cetvocab.ui.QuizUiState.stage]），
+     * 不能在这里读属性 [stage]：属性读的是实时值，而用户完全可能在答到一半时
+     * 切到别的标签把级别从四级改成六级，那样入库的 stage 与题目实际级别不一致，
+     * 排行榜与按级别统计的成就都会错档。
+     */
     fun saveQuizRecord(
-        unit: Int, mode: String, score: Int, total: Int,
+        stage: Int, unit: Int, mode: String, score: Int, total: Int,
         correct: Int, maxCombo: Int, durationMs: Long
     ): QuizRecord {
         val record = QuizRecord(
@@ -360,58 +397,70 @@ class VocabRepository(context: Context) {
 
     // ---------------- 统计 ----------------
 
-    fun streakDays(): Int {
-        val set = userDb.studyDays().toHashSet()
-        if (set.isEmpty()) return 0
+    /**
+     * 由同一份学习日期同时算出「当前连续打卡」与「历史最长连续」。
+     *
+     * [streakDays] 与 [bestStreak] 各自都要把 `study_log` 的 DISTINCT day 全表读一遍，
+     * 而这两个值都在「每答一个单词」就会跑的 [overview] 里用到 —— 合并成一次扫描，
+     * 每次作答少一遍全表查询。语义与拆开写时完全一致：
+     * 今天没学但昨天连了一串，当前连续仍从昨天往回数（不因为「今天还没学」而清零）。
+     */
+    private fun streaks(days: List<String>): Pair<Int, Int> {
         val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+        val set = days.toHashSet()
+        if (set.isEmpty()) return 0 to 0
+
+        var current = 0
         var cursor = LocalDate.now()
         if (!set.contains(cursor.format(fmt))) cursor = cursor.minusDays(1)
-        var count = 0
         while (set.contains(cursor.format(fmt))) {
-            count++
+            current++
             cursor = cursor.minusDays(1)
         }
-        return count
-    }
 
-    fun bestStreak(): Int {
-        val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-        val dates = userDb.studyDays()
+        var best = 0
+        var run = 0
+        var previous: LocalDate? = null
+        days.asSequence()
             .mapNotNull { runCatching { LocalDate.parse(it, fmt) }.getOrNull() }
             .distinct()
             .sorted()
-        if (dates.isEmpty()) return 0
-        var best = 1
-        var cur = 1
-        for (i in 1 until dates.size) {
-            if (dates[i] == dates[i - 1].plusDays(1)) {
-                cur++
-                if (cur > best) best = cur
-            } else {
-                cur = 1
+            .forEach { d ->
+                // 取一份局部副本再比较：previous 是被闭包捕获的可变局部变量，
+                // Kotlin 不允许对它智能转换
+                val prev = previous
+                run = if (prev != null && d == prev.plusDays(1)) run + 1 else 1
+                if (run > best) best = run
+                previous = d
             }
-        }
-        return best
+        return current to best
     }
+
+    fun streakDays(): Int = streaks(userDb.studyDays()).first
+
+    /** 历史最长连续打卡：断签之后仍然保留的高光记录 */
+    fun bestStreak(): Int = streaks(userDb.studyDays()).second
 
     /**
      * 学习总览。
      *
      * [preloadedStates] 用于避免重复读表：调用方（如 [evaluateAchievements]）往往
      * 已经拿到了 states，再让 overview 自己查一次就是白白多一次全表扫描。
+     * 连续打卡与历史最长同样只读一次 `studyDays()`（见 [streaks]）。
      */
     fun overview(preloadedStates: Map<Int, WordState>? = null): StudyOverview {
         val states = preloadedStates ?: userDb.states()
         val (correct, wrong) = userDb.correctWrongTotals()
         val seconds = userDb.studySeconds() + userDb.quizTotalMs() / 1000
+        val (streak, best) = streaks(userDb.studyDays())
         return StudyOverview(
             todayLearned = userDb.todayLearnedCount(),
             totalLearned = states.count { it.value.level > 0 },
-            mastered = states.count { it.value.level >= 3 },
+            mastered = states.count { it.value.level >= MASTER_LEVEL },
             totalCorrect = correct,
             totalWrong = wrong,
-            streakDays = streakDays(),
-            bestStreak = bestStreak(),
+            streakDays = streak,
+            bestStreak = best,
             totalMinutes = (seconds / 60).toInt(),
             quizPlayed = userDb.quizPlayedCount(),
             bestScore = userDb.bestScore()
@@ -595,7 +644,12 @@ class VocabRepository(context: Context) {
             execSQL("DELETE FROM achievement")
             execSQL("DELETE FROM app_meta")
         }
-        prefs.edit().clear().apply()
+        // 词库安装标记与用户设置同处 vocab_meta 这一个 prefs 文件。
+        // 无脑 clear() 会把 words_db_version 一起清掉，于是下次冷启动
+        // 「已装版本(0) != 内置版本(6)」成立，首个词库查询要同步从 assets
+        // 重拷 7.98 MB 词库，表现为「清空数据后第一次变卡」。清完必须把它写回去。
+        val installedVersion = prefs.getInt(WordDb.PREFS_DB_VERSION_KEY, 0)
+        prefs.edit().clear().putInt(WordDb.PREFS_DB_VERSION_KEY, installedVersion).apply()
     }
 
     companion object {
@@ -615,5 +669,21 @@ class VocabRepository(context: Context) {
         private const val KEY_ICON_STYLE = "icon_style"
         private const val KEY_THEME = "theme_mode"
         private const val KEY_ANIM = "animations_enabled"
+
+        /**
+         * 单次传入 [WordDb.wordsByIds] 的 id 上限。
+         * 与词库内部的 SQL 变量分批保持同一量级，避免一次性把上万个 id 拼进一条语句。
+         */
+        private const val ID_BATCH = 500
+
+        /**
+         * 「掌握」的最低等级。[levelLabel] 里 3 档文案是「熟悉」，
+         * 掌握词数（成就、总览）按 level >= 3 起算，两处必须用同一个常量，
+         * 不要再散着写魔法数字。
+         */
+        private const val MASTER_LEVEL = 3
+
+        /** 最高等级「精通」（levelLabel 的 5 档）：达到该档的词不再占用错词本 */
+        private const val LEVEL_EXPERT = 5
     }
 }

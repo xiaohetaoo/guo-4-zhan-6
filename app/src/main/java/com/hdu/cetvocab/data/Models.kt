@@ -37,7 +37,13 @@ data class Word(
 /** 用户对单词的掌握状态 */
 data class WordState(
     val wordId: Int,
-    val level: Int = 0,        // 0 未学 1 模糊 2 认识 3 掌握
+    /**
+     * 掌握等级，共 6 档，文案见
+     * [com.hdu.cetvocab.data.VocabRepository.levelLabel]：
+     * 0 未学 / 1 模糊 / 2 认识 / 3 熟悉 / 4 掌握 / 5 精通。
+     * 「掌握词数」按 `level >= 3` 起算，错词本在 `level == 5` 时把词移出。
+     */
+    val level: Int = 0,
     val wrongCount: Int = 0,
     val fav: Boolean = false,
     val lastTs: Long = 0L,
@@ -96,6 +102,18 @@ data class QuizAggregate(
 const val QUIZ_SCOPE_ALL = -1
 const val QUIZ_SCOPE_CONFUSABLE = -101
 const val QUIZ_SCOPE_TRANSLATION = -102
+
+/**
+ * 全词挑战的题量。单元 / 首字母 / 两个专题都是 10 题，只有这一关拉长到 50 题。
+ *
+ * 之所以是 50 而不是 30：连击类成就最高档要求「单次闯关连对 50 题」，
+ * 30 题的封顶会让它成为永远无法解锁的死成就。选关页的说明文案也引用这个常量，
+ * 避免题量改了、文案还说 30 题。
+ */
+const val STAGE_QUIZ_COUNT = 50
+
+/** 普通关卡（单元 / 首字母 / 专题）的题量 */
+const val UNIT_QUIZ_COUNT = 10
 
 /**
  * 拓展资源练习：入口在「我的」页成就卡下方，定位是**练习**而不是闯关。

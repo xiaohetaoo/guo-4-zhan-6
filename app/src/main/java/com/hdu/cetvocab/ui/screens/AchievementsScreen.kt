@@ -40,13 +40,18 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val state by vm.profile.collectAsState()
     val unlocked = state.unlocked
     val total = Achievements.ALL.size
-    val ratio = if (total == 0) 0f else unlocked.size.toFloat() / total
+    // 只统计「当前版本定义过」的成就码。库里的 code 可能来自手工编辑过的备份，
+    // 直接拿 unlocked.size 与 total 比会出现「已解锁 100 / 81 个成就」，
+    // 而下面进度条用的 fraction 一旦大于 1 就撞上 fillMaxWidth 的 require 断言。
+    val unlockedCount = Achievements.ALL.count { unlocked.containsKey(it.code) }
+    val ratio = if (total == 0) 0f
+    else (unlockedCount.toFloat() / total).coerceIn(0f, 1f)
     val goldenCount = Achievements.ALL.count { it.tier == 3 && unlocked.containsKey(it.code) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         AppTopBar(
             title = "成就墙",
-            subtitle = "已解锁 ${unlocked.size} / $total 个成就",
+            subtitle = "已解锁 $unlockedCount / $total 个成就",
             onBack = onBack
         )
 
@@ -68,7 +73,7 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = "${unlocked.size} / $total",
+                                    text = "$unlockedCount / $total",
                                     style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = LocalAppColors.current.success

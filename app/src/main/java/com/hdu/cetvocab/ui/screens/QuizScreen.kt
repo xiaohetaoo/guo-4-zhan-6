@@ -5,10 +5,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -75,6 +74,8 @@ import com.hdu.cetvocab.data.QUIZ_SCOPE_CONFUSABLE
 import com.hdu.cetvocab.data.QUIZ_SCOPE_TRANSLATION
 import com.hdu.cetvocab.data.QuizKind
 import com.hdu.cetvocab.data.QuizQuestion
+import com.hdu.cetvocab.data.STAGE_QUIZ_COUNT
+import com.hdu.cetvocab.data.UNIT_QUIZ_COUNT
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.data.quizScopeLabel
 import com.hdu.cetvocab.ui.AppViewModel
@@ -98,6 +99,9 @@ import com.hdu.cetvocab.ui.theme.springPress
 fun QuizScreen(
     vm: AppViewModel,
     onExit: () -> Unit,
+    // 拓展资源练习（易混词辨析 / 真题句子翻译）的退出落点：它们从「我的」页进来，
+    // 退出要回「我的」。普通闯关用不上这个回调（走 onExit / 排行榜入口）。
+    onOpenProfile: () -> Unit,
     onSpeak: (String) -> Unit,
     onSpeakAuto: (String) -> Unit,
     // 排行榜入口随「闯关」页一起呈现：成绩本来就是在闯关里打出来的，
@@ -141,7 +145,7 @@ fun QuizScreen(
         state.finished -> QuizResult(
             state,
             onOpenLeaderboard = onOpenLeaderboard,
-            onExit = onExit,
+            onOpenProfile = onOpenProfile,
             onAgain = {
                 // 两个专题关卡有自己的出题逻辑，不能直接走 startQuiz(unit)，
                 // 否则会被当成「全词挑战」重新抽一遍选义/拼写题。
@@ -242,14 +246,15 @@ private fun QuizPicker(
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = "${WordDb.stageLabel(stage)}词库 · 每关 10 题 · 选义 / 拼写两种题型",
+                    text = "${WordDb.stageLabel(stage)}词库 · 每关 $UNIT_QUIZ_COUNT 题 · 选义 / 拼写两种题型",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(12.dp))
                 AppCard(color = LocalAppColors.current.cardAmber, padding = 14.dp) {
                     Text(
-                        text = "玩法：答对得分并累积连击，拼写题分值更高。选择下方首字母开始 10 题挑战。",
+                        text = "玩法：答对得分并累积连击，拼写题分值更高。" +
+                            "选择下方首字母开始 $UNIT_QUIZ_COUNT 题挑战。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -266,7 +271,7 @@ private fun QuizPicker(
                             )
                             Spacer(Modifier.height(3.dp))
                             Text(
-                                text = "从本级全部单词中随机抽取 30 题",
+                                text = "从本级全部单词中随机抽取 $STAGE_QUIZ_COUNT 题",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -455,6 +460,12 @@ private fun QuizPlay(
              * （此时已经是新题的选中项与揭晓态），旧题的选项会串成新题的样子。
              * key 直接把旧子树丢掉，没有这个隐患，代价是少了退场动画——
              * 但题干是「一题接一题」的流，入场足够。
+             *
+             * **解析卡必须和题干在同一个 key 里。** 它此前挂在 key 外面：
+             * nextQuestion() 同时把 index+1 与 revealed=false，退场动画播放的那一帧
+             * `q` 已经是下一题，于是卡片会把**下一题的单词、音标、释义和「正确答案」**
+             * 直接播给玩家看（拼写题等于送分）。归进同一个 key 后换题即整棵丢弃，
+             * 跨题渲染的机会不存在了；相应地退场动画也不会再有机会播放，写 None 说明意图。
              */
             key(state.index) {
                 val enter = remember { Animatable(0f) }
@@ -473,151 +484,154 @@ private fun QuizPlay(
                         else -> ChoiceQuestion(q, state, vm, onSpeak)
                     }
                 }
-            }
 
-            // 解析卡从「瞬时出现」改为向下展开 + 淡入，像把卡片翻开来。
-            AnimatedVisibility(
-                visible = state.revealed,
-                enter = fadeIn(Motion.effects()) + expandVertically(Motion.spatial()) { it },
-                exit = fadeOut(Motion.effects()) + shrinkVertically(Motion.spatial())
-            ) {
-                // AnimatedVisibility 的插槽按单子项布局，直接塞两个子项会叠在一起，
-                // 这里显式套一层 Column，让「间距 + 解析卡」正常纵向排列。
-                Column {
-                    Spacer(Modifier.height(14.dp))
-                    AppCard(
-                    color = if (isCorrect(state, q))
-                        LocalAppColors.current.cardMint else LocalAppColors.current.cardPeach,
-                    padding = 16.dp
+                // 解析卡：揭晓时向下展开 + 淡入，像把卡片翻开来。
+                AnimatedVisibility(
+                    visible = state.revealed,
+                    enter = fadeIn(Motion.effects()) + expandVertically(Motion.spatial()) { it },
+                    // 与题干同属一个 key(index) 子树，换题时整棵被丢弃，退场动画没有机会
+                    // 播放；此前它挂在 key 外面，退场那一帧读的是下一题的数据，等于把
+                    // 下一题的答案播给玩家看。这里显式写 None 表明「无跨题退场」是有意为之。
+                    exit = ExitTransition.None
                 ) {
-                    val ok = isCorrect(state, q)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (ok) {
-                            IconCheck(
-                                modifier = Modifier.size(19.dp),
-                                color = LocalAppColors.current.success
-                            )
-                        } else {
-                            IconClose(
-                                modifier = Modifier.size(19.dp),
-                                color = LocalAppColors.current.danger
+                    // AnimatedVisibility 的插槽按单子项布局，直接塞两个子项会叠在一起，
+                    // 这里显式套一层 Column，让「间距 + 解析卡」正常纵向排列。
+                    Column {
+                        Spacer(Modifier.height(14.dp))
+                        AppCard(
+                        color = if (isCorrect(state, q))
+                            LocalAppColors.current.cardMint else LocalAppColors.current.cardPeach,
+                        padding = 16.dp
+                    ) {
+                        val ok = isCorrect(state, q)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (ok) {
+                                IconCheck(
+                                    modifier = Modifier.size(19.dp),
+                                    color = LocalAppColors.current.success
+                                )
+                            } else {
+                                IconClose(
+                                    modifier = Modifier.size(19.dp),
+                                    color = LocalAppColors.current.danger
+                                )
+                            }
+                            Spacer(Modifier.width(7.dp))
+                            Text(
+                                text = when (q.kind) {
+                                    QuizKind.SPELLING ->
+                                        if (ok) "拼写正确" else "正确答案：${q.word.word}"
+                                    QuizKind.TRANSLATION ->
+                                        if (ok) "译法全部选对" else "正确译法共 ${q.answerSet.size} 项"
+                                    QuizKind.CONFUSABLE ->
+                                        if (ok) "回答正确" else "正确答案：${q.options.getOrNull(q.correctIndex) ?: q.word.word}"
+                                    else ->
+                                        if (ok) "回答正确" else "正确答案：${q.word.translation}"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
                             )
                         }
-                        Spacer(Modifier.width(7.dp))
-                        Text(
-                            text = when (q.kind) {
-                                QuizKind.SPELLING ->
-                                    if (ok) "拼写正确" else "正确答案：${q.word.word}"
-                                QuizKind.TRANSLATION ->
-                                    if (ok) "译法全部选对" else "正确译法共 ${q.answerSet.size} 项"
-                                QuizKind.CONFUSABLE ->
-                                    if (ok) "回答正确" else "正确答案：${q.options.getOrNull(q.correctIndex) ?: q.word.word}"
-                                else ->
-                                    if (ok) "回答正确" else "正确答案：${q.word.translation}"
-                            },
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = if (q.kind == QuizKind.TRANSLATION) "关键词 ${q.word.word}" else q.word.word,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        if (q.word.phonetic.isNotBlank()) {
-                            Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = q.word.phonetic,
+                                text = if (q.kind == QuizKind.TRANSLATION) "关键词 ${q.word.word}" else q.word.word,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (q.word.phonetic.isNotBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = q.word.phonetic,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            SpeakButton(
+                                text = q.word.word,
+                                onSpeak = onSpeak,
+                                size = 30.dp,
+                                filled = false
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+
+                        if (q.kind == QuizKind.TRANSLATION) {
+                            // 翻译题把「可接受译法」逐条列出 —— 一义多译正是这关的训练重点
+                            Text(
+                                text = "可接受译法：",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Spacer(Modifier.height(4.dp))
+                            q.answerSet.sorted().forEach { idx ->
+                                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                                    IconCheck(
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .alignByBaseline()
+                                            .padding(end = 6.dp),
+                                        color = LocalAppColors.current.success
+                                    )
+                                    Text(
+                                        text = q.options.getOrNull(idx).orEmpty(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = q.word.translation,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        Spacer(Modifier.width(8.dp))
-                        SpeakButton(
-                            text = q.word.word,
-                            onSpeak = onSpeak,
-                            size = 30.dp,
-                            filled = false
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
 
-                    if (q.kind == QuizKind.TRANSLATION) {
-                        // 翻译题把「可接受译法」逐条列出 —— 一义多译正是这关的训练重点
-                        Text(
-                            text = "可接受译法：",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        q.answerSet.sorted().forEach { idx ->
-                            Row(modifier = Modifier.padding(vertical = 2.dp)) {
-                                IconCheck(
-                                    modifier = Modifier
-                                        .size(14.dp)
-                                        .alignByBaseline()
-                                        .padding(end = 6.dp),
-                                    color = LocalAppColors.current.success
-                                )
-                                Text(
-                                    text = q.options.getOrNull(idx).orEmpty(),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f)
+                        // 辨析题的关键价值在「横向对比」：把四个形近词的释义一起摆出来
+                        if (q.kind == QuizKind.CONFUSABLE && q.optionNotes.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            q.optionNotes.forEach { note ->
+                                BulletRow(
+                                    text = note,
+                                    modifier = Modifier.padding(vertical = 2.dp),
+                                    dotColor = MaterialTheme.colorScheme.primary
                                 )
                             }
                         }
-                    } else {
-                        Text(
-                            text = q.word.translation,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
 
-                    // 辨析题的关键价值在「横向对比」：把四个形近词的释义一起摆出来
-                    if (q.kind == QuizKind.CONFUSABLE && q.optionNotes.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        q.optionNotes.forEach { note ->
-                            BulletRow(
-                                text = note,
-                                modifier = Modifier.padding(vertical = 2.dp),
-                                dotColor = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-
-                    if (q.analysis.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = q.analysis,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    // 翻译题不再挂词库例句：关键词例句有不少是产品说明书、论文摘要之类的
-                    // 碎片，读起来莫名其妙；而「可接受译法」本身已经给出了规范的英文表达，
-                    // 再补一句差例句反而是减分。
-                    if (q.kind != QuizKind.TRANSLATION && q.word.sentence.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = q.word.sentence,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        if (q.word.sentenceCn.isNotBlank()) {
+                        if (q.analysis.isNotBlank()) {
+                            Spacer(Modifier.height(8.dp))
                             Text(
-                                text = q.word.sentenceCn,
-                                style = MaterialTheme.typography.labelSmall,
+                                text = q.analysis,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    }
+
+                        // 翻译题不再挂词库例句：关键词例句有不少是产品说明书、论文摘要之类的
+                        // 碎片，读起来莫名其妙；而「可接受译法」本身已经给出了规范的英文表达，
+                        // 再补一句差例句反而是减分。
+                        if (q.kind != QuizKind.TRANSLATION && q.word.sentence.isNotBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = q.word.sentence,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (q.word.sentenceCn.isNotBlank()) {
+                                Text(
+                                    text = q.word.sentenceCn,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        }
                     }
                 }
             }
@@ -639,7 +653,9 @@ private fun QuizPlay(
              */
             val canSubmit = when {
                 state.revealed -> true
-                q.kind == QuizKind.SPELLING -> true
+                // 拼写题必须先有输入：此前这里恒为 true，
+                // 误点一下「提交答案」就把空格判成错、白白废掉一题
+                q.kind == QuizKind.SPELLING -> state.typed.isNotBlank()
                 q.kind == QuizKind.TRANSLATION -> state.selectedSet.isNotEmpty()
                 else -> false
             }
@@ -665,8 +681,10 @@ private fun QuizPlay(
                     text = when {
                         state.revealed ->
                             if (state.index + 1 >= state.total) "查看成绩" else "下一题"
-                        q.kind == QuizKind.TRANSLATION -> "提交所选译法"
-                        q.kind == QuizKind.SPELLING -> "提交答案"
+                        q.kind == QuizKind.TRANSLATION ->
+                            if (state.selectedSet.isEmpty()) "请先选择译文" else "提交所选译法"
+                        q.kind == QuizKind.SPELLING ->
+                            if (state.typed.isBlank()) "请先拼写单词" else "提交答案"
                         else -> "请先选择答案"
                     },
                     fontWeight = FontWeight.SemiBold
@@ -1133,19 +1151,22 @@ private fun QuizResult(
     state: com.hdu.cetvocab.ui.QuizUiState,
     onOpenLeaderboard: () -> Unit,
     onAgain: () -> Unit,
-    onExit: () -> Unit,
+    onOpenProfile: () -> Unit,
     vm: AppViewModel
 ) {
     val total = state.total
     val accuracy = if (total == 0) 0 else state.correctCount * 100 / total
+    val perfect = total > 0 && state.correctCount == total
     val seconds = ((state.lastRecord?.durationMs ?: 0L) / 1000).toInt()
     // 拓展资源练习（易混词辨析 / 真题句子翻译）不进排行榜，
     // 结算页的文案、按钮与退出去向都要与普通闯关区分开：
-    // 它们从「我的」页进来，退出时应该回「我的」，而不是回闯关选关页。
+    // 它们从「我的」页进来，退出时就回「我的」——
+    // 早先这里调 onExit()（即 popBackStack），而进入用的是 goTab + popUpTo(HOME)，
+    // 返回栈是 [首页, 闯关]，于是点「返回」被带回**首页**，与本页文案不符。
     val isExtension = state.unit in EXTENSION_QUIZ_SCOPES
     fun leave() {
         vm.exitQuiz()
-        if (isExtension) onExit()
+        if (isExtension) onOpenProfile()
     }
 
     Column(
@@ -1169,7 +1190,11 @@ private fun QuizResult(
         Spacer(Modifier.height(10.dp))
         Text(
             text = when {
-                state.stars >= 3 -> "太棒了，满分通关！"
+                // 三星门槛是正确率 90%（见 AppViewModel.finishQuiz 的评星口径），
+                // 不等于全对。此前这里对三星一律写「满分通关」，10 题对 9 题也被说成满分，
+                // 而真正的满分成就要求 correct == total —— 文案与判分两套口径。
+                perfect -> "太棒了，满分通关！"
+                state.stars >= 3 -> "很强，只差一点就满分"
                 state.stars == 2 -> "不错，再冲一次满分"
                 state.stars == 1 -> "及格啦，继续巩固"
                 else -> "别灰心，多练几遍就好"

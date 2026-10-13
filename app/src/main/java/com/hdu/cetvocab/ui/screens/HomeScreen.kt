@@ -279,9 +279,11 @@ fun HomeScreen(
                 WeekBarChart(stats = state.weekStats, goal = state.goal)
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 四舍五入而不是整除截断：日均 4.86 词此前显示成「4 词」
                     Tag(text = "日均 ${
                         if (state.weekStats.isEmpty()) 0
-                        else state.weekStats.sumOf { it.learned } / state.weekStats.size
+                        else (state.weekStats.sumOf { it.learned }.toFloat() /
+                            state.weekStats.size).roundToInt()
                     } 词")
                     Spacer(Modifier.width(8.dp))
                     Tag(text = "最长连续 ${ov.bestStreak} 天")

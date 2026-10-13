@@ -281,15 +281,15 @@ private fun AppNavHost(
     ) {
 
         composable(Routes.HOME) {
+            // 学习页一律「取到词再跳转」：先 navigate 再异步装队列的话，
+            // 空队列（或冷启动拷词库的那一下）会让用户先看到学习页上的空态。
             HomeScreen(
                 vm = vm,
                 onStartToday = {
-                    vm.startTodayStudy()
-                    nav.navigate(Routes.STUDY)
+                    vm.startTodayStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
                 },
                 onStartExtra = {
-                    vm.startExtraStudy()
-                    nav.navigate(Routes.STUDY)
+                    vm.startExtraStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
                 }
             )
         }
@@ -298,17 +298,14 @@ private fun AppNavHost(
             LearnScreen(
                 vm = vm,
                 onOpenUnit = { unit ->
-                    vm.startUnitStudy(unit)
-                    nav.navigate(Routes.STUDY)
+                    vm.startUnitStudy(unit) { ok -> if (ok) nav.navigate(Routes.STUDY) }
                 },
                 onOpenWord = { id -> nav.navigate("${Routes.WORD}/$id") },
                 onStartFav = {
-                    vm.startFavStudy()
-                    nav.navigate(Routes.STUDY)
+                    vm.startFavStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
                 },
                 onStartWrong = {
-                    vm.startWrongStudy()
-                    nav.navigate(Routes.STUDY)
+                    vm.startWrongStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
                 }
             )
         }
@@ -320,6 +317,10 @@ private fun AppNavHost(
                 // 原先这里写的是「跳到排行榜」：一局打完点「返回」会被强行带到排行榜，
                 // 而排行榜另有入口（闯关页内的入口 + 结算页按钮），属于重复跳转。
                 onExit = { nav.popBackStack() },
+                // 拓展练习从「我的」页进来，退出就该回「我的」。
+                // 用 popBackStack 会被 popUpTo(HOME) 的返回栈带回**首页**，
+                // 与结算页文案「返回后可再次进入拓展练习」的承诺不符。
+                onOpenProfile = { goTab(TABS.indexOfFirst { it.route == Routes.PROFILE }) },
                 onSpeak = speak,
                 onSpeakAuto = speakAuto,
                 onOpenLeaderboard = { nav.navigate(Routes.LEADERBOARD) }
@@ -332,15 +333,18 @@ private fun AppNavHost(
                 onOpenAchievements = { nav.navigate(Routes.ACHIEVEMENTS) },
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) },
                 // 拓展资源练习：入口在「我的」页，但答题界面复用闯关页。
-                // 先让 ViewModel 装好对应题库，再用 goTab 跳到闯关标签 ——
-                // 与底部标签点击走同一条路径，返回栈与滑动方向才都一致。
+                // **装好题再切标签**：此前是先 goTab、再异步装题库，
+                // 用户会先看到闯关选关页闪一下才进关卡；题库为空时更是直接停在选关页。
+                // 与底部标签点击走同一条 goTab 路径，返回栈与滑动方向才都一致。
                 onOpenConfusable = {
-                    vm.startConfusableQuiz()
-                    goTab(TABS.indexOfFirst { it.route == Routes.QUIZ })
+                    vm.startConfusableQuiz { ok ->
+                        if (ok) goTab(TABS.indexOfFirst { it.route == Routes.QUIZ })
+                    }
                 },
                 onOpenTranslation = {
-                    vm.startTranslationQuiz()
-                    goTab(TABS.indexOfFirst { it.route == Routes.QUIZ })
+                    vm.startTranslationQuiz { ok ->
+                        if (ok) goTab(TABS.indexOfFirst { it.route == Routes.QUIZ })
+                    }
                 }
             )
         }

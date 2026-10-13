@@ -57,7 +57,9 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit) {
             title = "历次成绩排行榜",
             // 用真实总次数，而不是 list.size：
             // 数据源 quizRecords(50) 最多返回 50 条，超过 50 次后「共 N 次」就不准了。
-            subtitle = "共 ${agg.count} 次闯关记录 · 按得分从高到低",
+            // 总数与上榜条数不一致时，把「只列前 50」标注出来，免得以为数据丢了。
+            subtitle = "共 ${agg.count} 次闯关记录 · 按得分从高到低" +
+                if (agg.count > list.size) "（榜单只显示前 ${list.size} 条）" else "",
             onBack = onBack
         )
 

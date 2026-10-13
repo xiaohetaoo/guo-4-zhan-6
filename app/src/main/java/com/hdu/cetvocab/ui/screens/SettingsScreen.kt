@@ -40,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -66,6 +67,7 @@ import com.hdu.cetvocab.ui.components.IconChevronRight
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.util.LauncherIcons
 import java.io.File
+import java.util.Locale
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 import kotlin.math.roundToInt
 
@@ -87,13 +89,19 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     // 会留下写了一半的文件）。
     val fileDone by vm.fileDone.collectAsState()
     val fileError by vm.fileError.collectAsState()
+    // 有文件任务在跑时把四行禁用：连点会并发写盘，备份名只到秒，
+    // 同一秒内的两次会算出同一个路径，交错写盘能留下一个半截 JSON
+    val fileBusy by vm.fileBusy.collectAsState()
 
     // 恢复流程状态（纯 UI 选择，不需要跨页面存活）
     var restoreChoices by remember { mutableStateOf<List<File>>(emptyList()) }
     var restoreTarget by remember { mutableStateOf<File?>(null) }
 
     fun copyPath(path: String) {
-        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        // getSystemService 的返回值声明为 @Nullable，个别 ROM 上剪贴板服务会取不到；
+        // 直接 as ClipboardManager 就是 NPE 崩溃，这里安全转换并安静跳过。
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return
         cm.setPrimaryClip(ClipData.newPlainText("path", path))
     }
 
@@ -124,7 +132,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "复习到期的单词不占用目标额度",
+                                text = "到期复习与新词一起计入今日学习量",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -149,7 +157,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         onValueChange = { goalSlider = it },
                         onValueChangeFinished = { vm.setDailyGoal(goalSlider.roundToInt()) },
                         valueRange = 5f..100f,
-                        steps = 18,
+                        // 5..100 共 95 词，steps 要取「档位数 - 2」= 94，即一格一词。
+                        // 此前写的是 18：M3 的离散档位 = 区间 / (steps + 2) = 95/20 = 4.75，
+                        // 落点变成 5 / 9.75 / 14.5 / 19.25 / 24…，显示四舍五入后
+                        // 相邻两档忽 +5 忽 +4，而且**默认目标 20 根本选不出来**
+                        // —— 一碰滑杆就跳到 19 或 24。
+                        steps = 94,
                         colors = SliderDefaults.colors(
                             thumbColor = MaterialTheme.colorScheme.primary,
                             activeTrackColor = MaterialTheme.colorScheme.primary
@@ -293,7 +306,9 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             )
                         )
                         Text(
-                            text = String.format("%.2fx", rateSlider),
+                            // 必须显式指定 Locale.ROOT：不传时按设备语言取分隔符，
+                            // 德语/法语等环境下会显示成「0,92x」
+                            text = String.format(Locale.ROOT, "%.2fx", rateSlider),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.width(48.dp)
@@ -422,24 +437,28 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         title = "导出学习记录（CSV）",
                         desc = "含掌握等级、错误次数、上次学习与下次复习时间",
                         iconKind = 1,
+                        enabled = !fileBusy,
                         onClick = { vm.exportStudyCsv() }
                     )
                     ActionRow(
                         title = "导出单词本（CSV）",
                         desc = "仅导出收藏的生词，按字母序排列",
                         iconKind = 2,
+                        enabled = !fileBusy,
                         onClick = { vm.exportFavCsv() }
                     )
                     ActionRow(
                         title = "备份数据（JSON）",
                         desc = "完整备份学习进度、成绩、成就与设置",
                         iconKind = 3,
+                        enabled = !fileBusy,
                         onClick = { vm.backupJson() }
                     )
                     ActionRow(
                         title = "恢复数据",
                         desc = "从备份文件恢复，将覆盖当前全部学习数据",
                         iconKind = 4,
+                        enabled = !fileBusy,
                         onClick = { pickRestore() }
                     )
                     Spacer(Modifier.height(6.dp))
@@ -727,15 +746,17 @@ private fun ActionRow(
     title: String,
     desc: String,
     iconKind: Int,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     val accent = MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.42f)
             .clip(RoundedCornerShape(16.dp))
             .background(accent.copy(alpha = 0.08f))
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

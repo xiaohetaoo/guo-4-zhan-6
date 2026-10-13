@@ -32,13 +32,13 @@ class WordDb(private val context: Context) {
         return synchronized(openLock) {
             db?.let { if (it.isOpen) return it }
             val out = File(context.filesDir, DB_NAME)
-            val prefs = context.getSharedPreferences("vocab_meta", Context.MODE_PRIVATE)
-            val installed = prefs.getInt("words_db_version", 0)
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val installed = prefs.getInt(PREFS_DB_VERSION_KEY, 0)
             if (!out.exists() || installed != DB_VERSION) {
                 context.assets.open(DB_NAME).use { input ->
                     out.outputStream().use { output -> input.copyTo(output, 128 * 1024) }
                 }
-                prefs.edit().putInt("words_db_version", DB_VERSION).apply()
+                prefs.edit().putInt(PREFS_DB_VERSION_KEY, DB_VERSION).apply()
             }
             SQLiteDatabase.openDatabase(out.path, null, SQLiteDatabase.OPEN_READONLY)
                 .also { db = it }
@@ -178,40 +178,43 @@ class WordDb(private val context: Context) {
     /**
      * 取某一级别的「真题句子翻译」题库。
      *
-     * 题库是 v5 词库新增的表；若用户设备上仍是旧副本（表不存在），
-     * 这里会抛 SQLiteException，统一转成空列表，让闯关页给出「题库暂不可用」
-     * 的提示，而不是让整个 App 崩在启动阶段。
+     * 题库是 v5 词库新增的表；若设备上仍是旧副本（表不存在），`rawQuery` 会抛
+     * SQLiteException。这里按注释所述**真的把它转成空列表**（早期实现只写了注释
+     * 没有 try/catch，一旦触发就是 IO 协程里的未捕获异常），
+     * 由闯关页给出「题库暂不可用」的提示，而不是让整个 App 崩掉。
      */
     fun translationItems(stage: Int): List<TranslationItem> {
         val list = ArrayList<TranslationItem>()
-        open().rawQuery(
-            "SELECT id,stage,keyword,chinese,opt_a,opt_b,opt_c,opt_d,correct,analysis " +
-                "FROM translation_quiz WHERE stage=? ORDER BY id",
-            arrayOf(stage.toString())
-        ).use { c ->
-            while (c.moveToNext()) {
-                val correct = (c.getString(8) ?: "").split(",")
-                    .mapNotNull { it.trim().toIntOrNull() }
-                    .filter { it in 0..3 }
-                    .toSet()
-                // 解析不出任何正确项的数据视为脏数据，直接丢弃，避免出一道无解题
-                if (correct.isEmpty()) continue
-                list.add(
-                    TranslationItem(
-                        id = c.getInt(0),
-                        stage = c.getInt(1),
-                        keyword = c.getString(2) ?: "",
-                        chinese = c.getString(3) ?: "",
-                        options = listOf(
-                            c.getString(4) ?: "",
-                            c.getString(5) ?: "",
-                            c.getString(6) ?: "",
-                            c.getString(7) ?: ""
-                        ),
-                        correct = correct,
-                        analysis = c.getString(9) ?: ""
+        runCatching {
+            open().rawQuery(
+                "SELECT id,stage,keyword,chinese,opt_a,opt_b,opt_c,opt_d,correct,analysis " +
+                    "FROM translation_quiz WHERE stage=? ORDER BY id",
+                arrayOf(stage.toString())
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val correct = (c.getString(8) ?: "").split(",")
+                        .mapNotNull { it.trim().toIntOrNull() }
+                        .filter { it in 0..3 }
+                        .toSet()
+                    // 解析不出任何正确项的数据视为脏数据，直接丢弃，避免出一道无解题
+                    if (correct.isEmpty()) continue
+                    list.add(
+                        TranslationItem(
+                            id = c.getInt(0),
+                            stage = c.getInt(1),
+                            keyword = c.getString(2) ?: "",
+                            chinese = c.getString(3) ?: "",
+                            options = listOf(
+                                c.getString(4) ?: "",
+                                c.getString(5) ?: "",
+                                c.getString(6) ?: "",
+                                c.getString(7) ?: ""
+                            ),
+                            correct = correct,
+                            analysis = c.getString(9) ?: ""
+                        )
                     )
-                )
+                }
             }
         }
         return list
@@ -219,6 +222,18 @@ class WordDb(private val context: Context) {
 
     companion object {
         const val DB_NAME = "words.db"
+
+        /**
+         * 应用偏好文件名。**词库安装标记与用户设置共用这一个 prefs 文件**，
+         * 所以任何 `edit().clear()` 都必须显式保住 [PREFS_DB_VERSION_KEY]，
+         * 否则清完数据下次冷启动会把 7.98 MB 词库从 assets 重新拷一遍（见
+         * [VocabRepository.resetAll]）。
+         */
+        const val PREFS_NAME = "vocab_meta"
+
+        /** 已安装到私有目录的词库版本号标记（与 [DB_VERSION] 比对） */
+        const val PREFS_DB_VERSION_KEY = "words_db_version"
+
         /**
          * v5：新增 translation_quiz（真题句子翻译题库）
          * v6：translation_quiz 扩充至 322 条（四级 161 / 六级 161）

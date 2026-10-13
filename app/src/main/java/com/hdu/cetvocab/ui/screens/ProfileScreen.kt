@@ -69,7 +69,9 @@ fun ProfileScreen(
 ) {
     val state by vm.profile.collectAsState()
     val ov = state.overview
-    val unlockedCount = state.unlocked.size
+    // 只数「当前版本定义过」的成就码：库里若混入未知 code（手改过的备份），
+    // 直接取 size 会显示成「成就（100 / 81）」
+    val unlockedCount = Achievements.ALL.count { state.unlocked.containsKey(it.code) }
 
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),

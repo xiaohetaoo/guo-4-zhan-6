@@ -1,5 +1,7 @@
 package com.hdu.cetvocab
 
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,10 +15,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import com.hdu.cetvocab.data.VocabRepository
 import com.hdu.cetvocab.ui.AppRoot
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.theme.CetVocabTheme
+import com.hdu.cetvocab.ui.theme.DarkBackground
+import com.hdu.cetvocab.ui.theme.DarkSurface
+import com.hdu.cetvocab.ui.theme.WarmBackground
+import com.hdu.cetvocab.ui.theme.WarmSurface
 import com.hdu.cetvocab.util.LauncherIcons
 import kotlinx.coroutines.launch
 
@@ -27,6 +34,25 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val repo = (application as CetVocabApp).repo
+
+        // 冷启动窗口的底色必须按「应用自己的明暗模式」显式覆盖。
+        // themes.xml 里的 @color/warm_background 由 values / values-night 两套资源按
+        // **系统 uiMode** 解析，而设置页允许把应用固定为浅色或深色；两者不一致时
+        // （系统深色 + 应用固定浅色）窗口会先亮一帧深色底，再被 Compose 首帧接管，
+        // 表现为启动时闪一下。CetVocabTheme 里的 SideEffect 只管系统栏，
+        // 管不到「首帧之前」的窗口背景。
+        val systemDark = resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        val darkNow = when (repo.themeMode) {
+            VocabRepository.THEME_LIGHT -> false
+            VocabRepository.THEME_DARK -> true
+            else -> systemDark
+        }
+        val background = if (darkNow) DarkBackground else WarmBackground
+        val surface = if (darkNow) DarkSurface else WarmSurface
+        window.setBackgroundDrawable(ColorDrawable(background.toArgb()))
+        window.statusBarColor = background.toArgb()
+        window.navigationBarColor = surface.toArgb()
 
         setContent {
             // 启动瞬间先用本地偏好里的明暗模式，避免「先按系统渲染、读到偏好后再跳一次」的闪烁
