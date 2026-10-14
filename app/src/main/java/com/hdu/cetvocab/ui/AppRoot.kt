@@ -1,15 +1,23 @@
 package com.hdu.cetvocab.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -27,12 +35,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.hdu.cetvocab.R
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -163,6 +174,23 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     val tabIndex = TABS.indexOfFirst { it.route == route }
 
     /*
+     * 首帧数据就绪前的占位。
+     *
+     * 三个首页/词库/「我的」状态都带 loading=true 默认值，但页面只读数据不读标志：
+     * 冷启动（首启还要把 7.98 MB 词库拷进 files 目录）期间它们各自为空，
+     * 于是用户会先看到一组**错的**内容 —— 首页队列 0 → 「今日已完成 · 额度用满」，
+     * 词库页整片空白（连空态提示都不该出现，因为还不是空，是还没加载），
+     * 「我的」统计全 0。数据到位后内容再翻回正确的一版，看起来像应用自己算错过。
+     *
+     * 用前景遮罩而不是把 NavHost 换成占位页：返回栈、底部栏、主题都保持原样，
+     * 就绪后遮罩消失，不会额外触发一次导航或让底部栏重播入场动画。
+     */
+    val homeState by vm.home.collectAsState()
+    val learnState by vm.learn.collectAsState()
+    val profileState by vm.profile.collectAsState()
+    val bootPending = homeState.loading || learnState.loading || profileState.loading
+
+    /*
      * 本次标签切换的滑动方向：`1` 目标在右侧（内容从右往左推），`-1` 目标在左侧。
      *
      * 为什么必须由「用户点了哪个标签」在导航**之前**算好，而不是在转场 lambda 里
@@ -233,6 +261,39 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 .tabSwipe(tabIndex, ::goTab)
         ) {
             AppNavHost(nav, vm, swipeDir, ::goTab, speech::speak, speech::speakAuto)
+
+            AnimatedVisibility(
+                visible = bootPending,
+                enter = fadeIn(Motion.effects()),
+                exit = fadeOut(Motion.effects())
+            ) {
+                BootPlaceholder()
+            }
+        }
+    }
+}
+
+/** 词库与统计尚未就绪时的整屏占位（见 [AppRoot] 里 bootPending 的注释） */
+@Composable
+private fun BootPlaceholder() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(26.dp),
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 3.dp
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = stringResource(R.string.state_loading),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -246,6 +307,16 @@ private fun AppNavHost(
     speak: (String) -> Unit,
     speakAuto: (String) -> Unit
 ) {
+    /*
+     * 进学习页统一走这里，必须带 launchSingleTop。
+     *
+     * 学习入口都是「先在 IO 线程取词，取到了才跳转」（见 AppViewModel.startQueue 的回调），
+     * 于是从点击到跳转之间有几十到几百毫秒的窗口，期间按钮没有禁用。
+     * 连点两下就会压进两张 STUDY：学完点「完成」只 pop 掉一张，
+     * 用户留在一张空队列的学习页上（StudyScreen 的空态），退不出去还得再点一次。
+     */
+    fun goStudy() = nav.navigate(Routes.STUDY) { launchSingleTop = true }
+
     NavHost(
         navController = nav,
         startDestination = Routes.HOME,
@@ -286,10 +357,10 @@ private fun AppNavHost(
             HomeScreen(
                 vm = vm,
                 onStartToday = {
-                    vm.startTodayStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
+                    vm.startTodayStudy { ok -> if (ok) goStudy() }
                 },
                 onStartExtra = {
-                    vm.startExtraStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
+                    vm.startExtraStudy { ok -> if (ok) goStudy() }
                 }
             )
         }
@@ -298,14 +369,14 @@ private fun AppNavHost(
             LearnScreen(
                 vm = vm,
                 onOpenUnit = { unit ->
-                    vm.startUnitStudy(unit) { ok -> if (ok) nav.navigate(Routes.STUDY) }
+                    vm.startUnitStudy(unit) { ok -> if (ok) goStudy() }
                 },
                 onOpenWord = { id -> nav.navigate("${Routes.WORD}/$id") },
                 onStartFav = {
-                    vm.startFavStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
+                    vm.startFavStudy { ok -> if (ok) goStudy() }
                 },
                 onStartWrong = {
-                    vm.startWrongStudy { ok -> if (ok) nav.navigate(Routes.STUDY) }
+                    vm.startWrongStudy { ok -> if (ok) goStudy() }
                 }
             )
         }

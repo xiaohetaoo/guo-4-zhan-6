@@ -32,6 +32,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -92,6 +93,15 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     // 有文件任务在跑时把四行禁用：连点会并发写盘，备份名只到秒，
     // 同一秒内的两次会算出同一个路径，交错写盘能留下一个半截 JSON
     val fileBusy by vm.fileBusy.collectAsState()
+
+    // 结果由 ViewModel 持有，因此用户点完「导出」立刻返回上一页时任务照跑，
+    // 完成后写入的结果却没人消费 —— 于是下次（可能是几天后）进设置页会凭空
+    // 弹出一条过期成功框。进页面时先把上一次的遗留结果丢掉：文件本身已经落盘，
+    // 真要路径再导一次即可，一条几小时前的成功提示没有参考价值。
+    LaunchedEffect(Unit) {
+        vm.consumeFileDone()
+        vm.consumeFileError()
+    }
 
     // 恢复流程状态（纯 UI 选择，不需要跨页面存活）
     var restoreChoices by remember { mutableStateOf<List<File>>(emptyList()) }

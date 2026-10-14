@@ -441,7 +441,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     query = if (sameStage) old.query else "",
                     searchResult = if (sameStage) old.searchResult else emptyList(),
                     allWords = if (sameStage) old.allWords else emptyList(),
-                    allWordsLoading = if (sameStage) old.allWordsLoading else false
+                    allWordsLoading = if (sameStage) old.allWordsLoading else false,
+                    // 截断标记必须跟着搜索结果一起继承。漏掉它时，收藏一个词、
+                    // 打完一局这类随手触发的 refreshLearn 会把「按字母序只显示前 60 个」
+                    // 悄悄改回「匹配 60 个单词」，而列表里的 60 条一条没变 —— 用户会以为
+                    // 整个级别真的只有 60 个匹配。
+                    searchTruncated = if (sameStage) old.searchTruncated else false
                 )
             }
         }
@@ -570,15 +575,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             onReady(false)
             return
         }
-        val favIds = withContext(Dispatchers.IO) {
-            repo.userDb.states().values.filter { it.fav }.map { it.wordId }.toSet()
+        // 两次查询都要在 IO 线程做：viewModelScope 默认是 Main.immediate，
+        // 上面取 favIds 已经包了 withContext(IO)，这里 `stateOf` 曾是漏网的主线程读库
+        // ——冷启动首次进学习页正好撞上建库/拷 7.98 MB 词库的窗口，主线程会卡顿一下。
+        val startWordId = queue.first().id
+        val (favIds, startLevel) = withContext(Dispatchers.IO) {
+            repo.userDb.states().values.filter { it.fav }.map { it.wordId }.toSet() to
+                repo.userDb.stateOf(startWordId).level
         }
         _study.value = StudyUiState(
             title = title,
             queue = queue,
             index = 0,
             favIds = favIds,
-            currentLevel = repo.userDb.stateOf(queue.first().id).level
+            currentLevel = startLevel
         )
         onReady(true)
     }
@@ -1089,13 +1099,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 异常的 message 多是英文技术串（`Permission denied`、`End of input at character 0 of`），
      * 标题「操作失败」配一行英文栈式描述，用户完全不知道该做什么。
      *
-     * 规则：我们自己抛出的中文说明（BackupManager 的 require 文案）原样展示 ——
-     * 那些本来就是完整句子；其余异常包一句中文行动建议，技术细节降级成第二行，
-     * 方便用户复制给开发者排查。
+     * 规则：**按异常类型**识别自家文案，而不是按字符集猜。
+     * BackupManager 的校验用 `require { }`，抛的是 IllegalArgumentException，
+     * 那些本来就是完整的中文句子，原样展示；其余异常包一句中文行动建议，
+     * 技术细节降级成第二行，方便用户复制给开发者排查。
+     *
+     * 早先用「message 里含中文」判断，被中文目录名骗过：导出/备份目录就叫
+     * 「导出」「备份」，写盘失败时 FileNotFoundException 的 message 带完整路径，
+     * 一定含中文 → 英文报错被当成友好文案原样弹出来，行动建议和技术信息全丢。
      */
     private fun fileErrorMessage(action: String, error: Throwable): String {
         val raw = error.message?.trim().orEmpty()
-        return if (raw.isNotEmpty() && raw.any { it in '一'..'龥' }) raw
+        return if (error is IllegalArgumentException && raw.isNotEmpty()) raw
         else "$action，请检查本机存储空间是否充足、文件是否可读，然后重试。" +
             "\n（技术信息：${raw.ifBlank { error.javaClass.simpleName }}）"
     }

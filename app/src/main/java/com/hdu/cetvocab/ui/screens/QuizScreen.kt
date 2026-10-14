@@ -132,10 +132,16 @@ fun QuizScreen(
     // 拦截系统返回键。
     // 此前完全没有拦截：答题中按返回键会直接离开页面，但 _quiz.active 仍为 true，
     // 再进来时计时/状态都停在原处，用户也不知道这一局到底算不算数。
+    //
+    // 拓展练习（易混词辨析 / 真题句子翻译）从「我的」页进来，用的是
+    // goTab(QUIZ) + popUpTo(HOME)，返回栈是 [首页, 闯关]：这时 onExit()（popBackStack）
+    // 会把人带回**首页**，而结算页的按钮与文案都已经承诺「回我的」。
+    // 退出落点必须按关卡类型统一判断，否则同一局游戏三条退出路径指向两个地方。
+    val isExtensionQuiz = state.unit in EXTENSION_QUIZ_SCOPES
     BackHandler(enabled = state.active || state.finished) {
         if (state.finished) {
             vm.exitQuiz()
-            onExit()
+            if (isExtensionQuiz) onOpenProfile() else onExit()
         } else {
             confirmQuit = true
         }
@@ -197,7 +203,10 @@ fun QuizScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmQuit = false
+                    // 拓展练习中途退出同样要回「我的」：只 exitQuiz() 的话人停在闯关选关页，
+                    // 而这一局是从「我的 → 易混词辨析 / 真题句子翻译」进来的。
                     vm.exitQuiz()
+                    if (isExtensionQuiz) onOpenProfile()
                 }) { Text(stringResource(R.string.action_quit)) }
             },
             dismissButton = {
@@ -1308,7 +1317,17 @@ private fun QuizResult(
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.clickable { leave() }
+            /*
+             * 这一行字本身就是「返回」按钮，但它是 labelSmall 的一行文本，
+             * 不加处理时命中区只有文字那几个 dp 高，用户点旁边一点就没反应。
+             * padding 放在 clickable **之后**：这样内外两层尺寸一致，
+             * 空白边距也算命中区（反过来写 padding 在 clickable 之前，那段留白是不响应的）。
+             * 再补 role = Role.Button，读屏才会念成「按钮」而不是一句普通说明。
+             */
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(role = Role.Button) { leave() }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         )
         Spacer(Modifier.height(20.dp))
     }

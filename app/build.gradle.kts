@@ -34,8 +34,10 @@ android {
         targetSdk = 34
         // 修订号满 10 进位：1.3.9 的这一版是全站文案修订（修订 +1 → 1.3.10），
         // 按项目版本规则写成 v1.4.0。
-        versionCode = 41
-        versionName = "1.4.0"
+        // v1.4.1 = 全量代码审查后的缺陷修订（冷启动占位、学习页重复压栈、
+        // 搜索截断提示被吞、拓展练习退出落点、错误文案判定等），修订 +1。
+        versionCode = 42
+        versionName = "1.4.1"
         vectorDrawables { useSupportLibrary = true }
     }
 

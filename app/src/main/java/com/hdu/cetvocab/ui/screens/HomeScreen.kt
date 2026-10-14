@@ -184,7 +184,13 @@ fun HomeScreen(
                                     "待复习 ${state.dueCount} 词 · 队列 ${state.queueCount} 词"
                                 state.queueCount > 0 ->
                                     "复习已还清 · 队列 ${state.queueCount} 词"
-                                else -> "复习已还清 · 今日额度用满"
+                                progress >= 1f ->
+                                    "复习已还清 · 今日额度用满"
+                                // 队列为空却还没达标，只可能是本级词已全部学过
+                                // （todayQueue = 到期词 + 补足到目标的新词）。
+                                // 这时不能说「今日额度用满」—— 今日一个都没学。
+                                else ->
+                                    "本级 ${state.totalWords} 词都已学过 · 可切换别的级别"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -196,6 +202,7 @@ fun HomeScreen(
                 // 点击仍然会走 onStartToday —— startTodayStudy 拿到空队列后
                 // 只是弹一句提示，但导航是无条件执行的，用户会被带进一个空的学习页。
                 val canStart = state.queueCount > 0
+                val goalReached = progress >= 1f
                 if (canStart) {
                     Button(
                         onClick = onStartToday,
@@ -219,29 +226,37 @@ fun HomeScreen(
                      */
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Tag(
-                            text = "今日已完成",
+                            text = if (goalReached) "今日已完成" else "本级已学完",
                             container = LocalAppColors.current.cardMint,
                             contentColor = LocalAppColors.current.success
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "想再学一批，可以提前学下一组新词",
+                            text = if (goalReached) "想再学一批，可以提前学下一组新词"
+                            else "本级没有可学的新词了，可切换另一个级别",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = onStartExtra,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                    ) {
-                        Text(text = "继续学习", fontWeight = FontWeight.SemiBold)
+                    // 「继续学习」走的是 extraQueue = 到期词 + 预学新词。
+                    // 队列空又没达标时，到期词必然为 0、本级新词也必然为 0
+                    // （否则 todayQueue 就能凑出词来），extraQueue 同样必然是空 ——
+                    // 这时候摆一个整行的主按钮，点下去只弹一句「这里暂时没有需要学习的单词」，
+                    // 是个骗人的按钮，直接不渲染。
+                    if (goalReached) {
+                        Spacer(Modifier.height(10.dp))
+                        Button(
+                            onClick = onStartExtra,
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                        ) {
+                            Text(text = "继续学习", fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
