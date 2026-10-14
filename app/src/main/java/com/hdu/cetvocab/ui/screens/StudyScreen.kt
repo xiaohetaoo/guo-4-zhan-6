@@ -166,9 +166,8 @@ fun StudyScreen(
                     )
                 }
                 Tag(
-                    // 与底部按钮同名：按钮是「有印象」，统计位就不能写「认识」，
-                    // 「认识」是 levelLabel 的第 2 档（连对两次才到）。
-                    text = "有印象 ${state.knownCount}",
+                    // 与底部按钮同名，也和结算页的两块统计同名。
+                    text = "认识 ${state.knownCount}",
                     container = LocalAppColors.current.cardMint,
                     contentColor = LocalAppColors.current.success
                 )
@@ -257,7 +256,7 @@ fun StudyScreen(
 
         // ---------- 底部操作 ----------
         Column(modifier = Modifier.padding(16.dp)) {
-            // 「查看释义」与「有印象 / 待加强」两组按钮的切换也走弹簧：
+            // 「查看释义」与「认识 / 待加强」两组按钮的切换也走弹簧：
             // 原先是一帧之内直接换掉，跟上面翻卡的动画节奏完全脱节。
             AnimatedContent(
                 targetState = state.flipped,
@@ -548,14 +547,14 @@ private fun StudySummary(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "共 $total 个单词 · 有印象 $rate%",
+                text = "共 $total 个单词 · 认识 $rate%",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(20.dp))
             AppCard(padding = 18.dp) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SummaryTile("有印象", known, LocalAppColors.current.success, LocalAppColors.current.cardMint, Modifier.weight(1f))
+                    SummaryTile("认识", known, LocalAppColors.current.success, LocalAppColors.current.cardMint, Modifier.weight(1f))
                     SummaryTile("待加强", unknown, LocalAppColors.current.warning, LocalAppColors.current.cardAmber, Modifier.weight(1f))
                 }
             }

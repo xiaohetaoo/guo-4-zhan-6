@@ -7,6 +7,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -14,6 +15,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -171,14 +173,41 @@ object Motion {
         if (!animationsEnabled) ExitTransition.None
         else slideOutHorizontally(animationSpec = spatial()) { it } + fadeOut(effects())
 
-    /** 底部导航栏进出：整条栏从下方弹簧升起 / 落回。 */
+    /**
+     * 底部导航栏进出：**只做高度收放 + 淡入淡出**，不再让整条栏竖向滑。
+     *
+     * 原先写的是 `slideOutVertically(spatial()) + fadeOut`，真机逐帧抓出来是
+     * 一个明显的「突变」：AnimatedVisibility 在退出动画收尾之前，一直替这条栏
+     * 保留着 80dp 的布局高度，而 Scaffold 给内容加的下边距正是按这个高度算的。
+     * 于是从首页点「开始今日学习」——
+     *   ① 学习页推入，此时下面还留着 80dp，卡片按较矮的高度排版；
+     *   ② 栏体弹簧动画收尾，占位一次性归零；
+     *   ③ 学习卡整页往下挪 80dp（实测 1884px → 2204px）。
+     * 用户看到的就是「卡片进来后又跳了一下」。
+     *
+     * 改成 expand / shrink 之后，「占位」和「看得见的栏」是同一个动画，
+     * 不会再各走各的；同时把速率提到 [barHeight]（比主弹簧快），
+     * 让空间在页面推入的过程中就释放完，卡片落进来时已经是最终尺寸。
+     */
     fun barEnter(): EnterTransition =
         if (!animationsEnabled) EnterTransition.None
-        else slideInVertically(animationSpec = spatial()) { it } + fadeIn(effects())
+        else expandVertically(animationSpec = barHeight()) + fadeIn(effects())
 
     fun barExit(): ExitTransition =
         if (!animationsEnabled) ExitTransition.None
-        else slideOutVertically(animationSpec = spatial()) { it } + fadeOut(effects())
+        else shrinkVertically(animationSpec = barHeight()) + fadeOut(effects())
+
+    /**
+     * 底部栏高度变化的弹簧。
+     *
+     * 两条约束：
+     * 1. 必须比页面推入的 [spatial] 快，否则占位变化会拖到转场之后，又变成「跳一下」；
+     * 2. 必须临界阻尼（dampingRatio = 1），高度上的过冲会把内容顶出可视区，
+     *    看起来像整页在抖。所以这里不共用 [spatial]，也不共用带 0.9 阻尼的 [spatialSnappy]。
+     */
+    private fun <T> barHeight(): FiniteAnimationSpec<T> =
+        if (!animationsEnabled) snap()
+        else spring(dampingRatio = 1f, stiffness = Spring.StiffnessMedium)
 }
 
 /**

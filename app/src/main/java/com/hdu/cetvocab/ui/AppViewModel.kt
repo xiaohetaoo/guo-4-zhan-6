@@ -212,7 +212,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 作答处理中标志。
-     * 「有印象 / 不认识」按钮连点两下时，两个协程会读到同一份快照、算出同一个 nextIndex，
+     * 「认识 / 不认识」按钮连点两下时，两个协程会读到同一份快照、算出同一个 nextIndex，
      * 结果是同一道题被记两次而索引只 +1（跳过下一个单词）。用它把并发收成串行。
      */
     private var answering = false

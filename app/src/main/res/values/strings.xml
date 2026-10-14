@@ -36,10 +36,9 @@
     <string name="study_empty_queue">这里暂时没有需要学习的单词</string>
     <string name="study_reveal">查看释义与例句</string>
     <string name="study_unknown">不认识</string>
-    <!-- 按钮改名「有印象」：点完这一档 level=1，等级标签是「初识」。
-         原写法「认识了」和 level=2 的标签「认识」撞词，用户点完立刻看到「模糊」，
-         等于当面被系统反驳。 -->
-    <string name="study_known">有印象</string>
+    <!-- 「认识了」改「认识」：与统计位、结算项、等级 2 的标签同一说法，
+         也避免「认识了」读起来像过去式旁白。 -->
+    <string name="study_known">认识</string>
 
     <!-- 闯关 -->
     <string name="quiz_quit_title">退出本次闯关？</string>
