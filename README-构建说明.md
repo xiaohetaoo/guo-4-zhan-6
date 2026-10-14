@@ -70,8 +70,14 @@ CetVocab/
 # 1) 准备 JDK 17 并放进 PATH
 export PATH="/path/to/jdk-17/bin:$PATH"
 
-# 2) 在项目根目录写 local.properties 指向 Android SDK
-echo "sdk.dir=/path/to/android-sdk" > local.properties
+# 2) 在项目根目录写 local.properties：SDK 路径 + 签名三项
+#    （该文件已被 .gitignore 排除，口令不会进版本库）
+cat > local.properties <<'EOF'
+sdk.dir=/path/to/android-sdk
+cetvocab.storePassword=<你的 keystore 口令>
+cetvocab.keyAlias=<别名>
+cetvocab.keyPassword=<私钥口令>
+EOF
 
 # 3) 构建 release APK
 gradle assembleRelease
@@ -79,8 +85,21 @@ gradle assembleRelease
 # 产物：app/build/outputs/apk/release/app-release.apk
 ```
 
-如需重新签名，请在 `app/` 下放置 `cetvocab-release.jks`，或在 `app/build.gradle.kts`
-中把 `signingConfigs.release` 改为你自己的 keystore 信息（**本仓库未包含签名密钥**）。
+### 关于签名（读这段再动手，否则会撞一个「看不懂的构建失败」）
+
+- 仓库**不含**签名密钥：`app/cetvocab-release.jks` 与口令都不入库。要出可安装的 release 包，
+  需自行把 keystore 放到 `app/cetvocab-release.jks`，并在 `local.properties` 里给出上面三项。
+- 三项也可以不写文件、改用环境变量注入，适合 CI：
+  `CETVOCAB_STORE_PASSWORD` / `CETVOCAB_KEY_ALIAS` / `CETVOCAB_KEY_PASSWORD`
+  （优先级：环境变量 → local.properties）。
+- **两处都取不到时 release 构建会直接失败**，这是刻意设计：宁可失败，也不退回把口令硬编码进
+  `build.gradle.kts`（历史上正发生过，见提交记录与 `CHANGELOG.md`）。只想看功能的话跑 debug 即可：
+  `gradle assembleDebug`，无需任何签名配置（debug 包 applicationId 带 `.debug` 后缀，可与 release 并存）。
+- 要换自己的密钥：`keytool -genkeypair -V3 -keystore cetvocab-release.jks -storetype PKCS12 -alias <别名> -dname "CN=..." -validity 10000 -keyalg RSA -keysize 2048`。
+  注意**换证书后老用户无法覆盖升级**（签名不同会被系统拒绝），只能卸载重装；本项目历史版本共用同一把证书。
+- 历史遗留：早期版本的 `build.gradle.kts` 里出现过明文口令，且仓库曾公开。签名口令已轮换（证书不变，
+  覆盖升级仍可用），但公开仓库的历史提交里仍能看到旧字串——它已失效，仅作提示。
+
 
 ---
 
