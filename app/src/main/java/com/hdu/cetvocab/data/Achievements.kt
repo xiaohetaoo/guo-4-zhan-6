@@ -40,7 +40,7 @@ object Achievements {
     const val LEARN_3000 = "learn_3000"
     const val LEARN_5000 = "learn_5000"
 
-    // ---- 掌握词数阶梯 ----
+    // ---- 熟悉以上词数阶梯（level >= 3，见 VocabRepository.MASTER_LEVEL）----
     const val MASTER_100 = "master_100"
     const val MASTER_300 = "master_300"
     const val MASTER_500 = "master_500"
@@ -127,13 +127,19 @@ object Achievements {
         AchievementDef(QUIZ_PERFECT, "满分通关", "某次闯关全部答对", "medal", 2),
         AchievementDef(QUIZ_COMBO_10, "连击达人", "单次闯关连对 10 题", "bolt", 3),
         AchievementDef(QUIZ_SCORE_300, "高分猎手", "单次闯关得分达到 300", "crown", 3),
-        AchievementDef(MASTER_50, "稳扎稳打", "掌握 50 个单词", "shield", 2),
-        AchievementDef(MASTER_200, "词汇奠基", "掌握 200 个单词", "shield", 3),
-        AchievementDef(ACCURACY_90, "精准记忆", "累计正确率达到 90%", "target", 2),
+        // 「掌握」在 levelLabel 里是第 4 档，而这些成就按 `level >= 3`（熟悉）统计，
+        // 所以成就文案一律写「熟悉以上」，和首页/「我的」页的统计位同一口径。
+        AchievementDef(MASTER_50, "稳扎稳打", "熟悉以上 50 个单词", "shield", 2),
+        AchievementDef(MASTER_200, "词汇奠基", "熟悉以上 200 个单词", "shield", 3),
+        // 正确率成就必须写明作答数下限：题目太少时正确率没有统计意义，
+        // 90% 档同样要求满 50 题，只有一档没写会让用户以为「答 5 题全对」就能解锁。
+        AchievementDef(ACCURACY_90, "精准记忆", "作答 50 题以上且正确率达到 90%", "target", 2),
         AchievementDef(FAV_20, "生词收藏家", "收藏 20 个生词", "star", 1),
         AchievementDef(GOAL_DONE, "今日达标", "完成一次每日学习目标", "check", 1),
         AchievementDef(NIGHT_OWL, "夜猫子", "在 22:00 之后学习", "moon", 1),
-        AchievementDef(EARLY_BIRD, "早起鸟", "在 7:00 之前学习", "sun", 1),
+        // 判定是 `hour in 1..6`（1:00–6:59），零点那一档属于「深夜苦读」，
+        // 原先写「7:00 之前」把 0:00–0:59 也算进来了，文案比代码宽。
+        AchievementDef(EARLY_BIRD, "早起鸟", "清晨 1:00 - 7:00 学习", "sun", 1),
         // 专题关卡：先给「第一次完成」的低门槛成就做引导，
         // 再用「累计 5 次全对」做长期目标，最后用一个跨专题的收尾成就串起来。
         AchievementDef(CONFUSABLE_FIRST, "明辨秋毫", "完成一次易混词辨析闯关", "eye", 1),
@@ -155,13 +161,13 @@ object Achievements {
         AchievementDef(LEARN_3000, "三千世界", "累计学习 3000 个单词", "mountain", 3),
         AchievementDef(LEARN_5000, "登峰造极", "累计学习 5000 个单词", "crown", 3),
 
-        // ---- 掌握词数阶梯 ----
-        AchievementDef(MASTER_100, "百炼成钢", "掌握 100 个单词", "shield", 2),
-        AchievementDef(MASTER_300, "炉火纯青", "掌握 300 个单词", "shield", 3),
-        AchievementDef(MASTER_500, "根基深厚", "掌握 500 个单词", "shield", 3),
-        AchievementDef(MASTER_800, "运用自如", "掌握 800 个单词", "shield", 3),
-        AchievementDef(MASTER_1000, "千词在握", "掌握 1000 个单词", "crown", 3),
-        AchievementDef(MASTER_2000, "词汇大师", "掌握 2000 个单词", "crown", 3),
+        // ---- 熟悉以上词数阶梯 ----
+        AchievementDef(MASTER_100, "百炼成钢", "熟悉以上 100 个单词", "shield", 2),
+        AchievementDef(MASTER_300, "炉火纯青", "熟悉以上 300 个单词", "shield", 3),
+        AchievementDef(MASTER_500, "根基深厚", "熟悉以上 500 个单词", "shield", 3),
+        AchievementDef(MASTER_800, "运用自如", "熟悉以上 800 个单词", "shield", 3),
+        AchievementDef(MASTER_1000, "千词在握", "熟悉以上 1000 个单词", "crown", 3),
+        AchievementDef(MASTER_2000, "词汇大师", "熟悉以上 2000 个单词", "crown", 3),
 
         // ---- 连续打卡阶梯 ----
         AchievementDef(STREAK_15, "半月不断", "连续打卡 15 天", "fire", 2),

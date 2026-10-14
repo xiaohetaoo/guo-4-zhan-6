@@ -85,7 +85,11 @@ fun WordDetailScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         AppTopBar(
             title = "单词详情",
-            subtitle = word?.let { "${WordDb.stageLabel(it.stage)} · 第 ${it.unit} 单元 · 第 ${it.rank} 词" } ?: "",
+            // rank 是「按字母排序后的序号」（tools/build_words_db.py 里 rank = i + 1），
+            // 不是词频也不是大纲编号；写成「第 N 词」会被读成「第 N 高频词」。
+            subtitle = word?.let {
+                "${WordDb.stageLabel(it.stage)} · 第 ${it.unit} 单元 · 字母序第 ${it.rank} 位"
+            } ?: "",
             onBack = onBack,
             trailing = {
                 // 心形是自绘图标、没有内置语义，必须由外层容器给出朗读文本
@@ -145,7 +149,9 @@ fun WordDetailScreen(
                         Spacer(Modifier.width(8.dp))
                     }
                     Tag(
-                        text = WordDb.stageLabel(w.stage) + "大纲词汇",
+                        // 不写「大纲词汇」：词表来自 ECDICT 的 cet4/cet6 社区标签并上教材词表，
+                        // 并未逐词对照官方大纲，标签措辞与设置页「数据来源」保持同一说法。
+                        text = WordDb.stageLabel(w.stage) + "词表",
                         container = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )

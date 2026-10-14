@@ -34,14 +34,14 @@ data class Word(
             }
 }
 
-/** 用户对单词的掌握状态 */
+/** 用户对单词的熟练度状态 */
 data class WordState(
     val wordId: Int,
     /**
-     * 掌握等级，共 6 档，文案见
+     * 熟练度等级，共 6 档，文案见
      * [com.hdu.cetvocab.data.VocabRepository.levelLabel]：
-     * 0 未学 / 1 模糊 / 2 认识 / 3 熟悉 / 4 掌握 / 5 精通。
-     * 「掌握词数」按 `level >= 3` 起算，错词本在 `level == 5` 时把词移出。
+     * 0 未学 / 1 初识 / 2 认识 / 3 熟悉 / 4 掌握 / 5 精通。
+     * 统计位说的「熟悉以上」按 `level >= 3` 起算，错词本在 `level == 5` 时把词移出。
      */
     val level: Int = 0,
     val wrongCount: Int = 0,

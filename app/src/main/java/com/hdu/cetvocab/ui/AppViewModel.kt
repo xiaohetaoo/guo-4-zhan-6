@@ -80,6 +80,8 @@ data class LearnUiState(
     val learnedWords: Int = 0,
     val query: String = "",
     val searchResult: List<Word> = emptyList(),
+    /** 搜索结果条数正好等于 [WordDb.SEARCH_LIMIT]：很可能还有没显示出来的匹配项 */
+    val searchTruncated: Boolean = false,
     val allWords: List<Word> = emptyList(),
     val allWordsLoading: Boolean = false,
     val favWords: List<Word> = emptyList(),
@@ -210,7 +212,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 作答处理中标志。
-     * 「认识 / 不认识」按钮连点两下时，两个协程会读到同一份快照、算出同一个 nextIndex，
+     * 「有印象 / 不认识」按钮连点两下时，两个协程会读到同一份快照、算出同一个 nextIndex，
      * 结果是同一道题被记两次而索引只 +1（跳过下一个单词）。用它把并发收成串行。
      */
     private var answering = false
@@ -477,7 +479,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _learn.update { it.copy(query = keyword) }
         searchJob?.cancel()
         if (keyword.isBlank()) {
-            _learn.update { it.copy(searchResult = emptyList()) }
+            _learn.update { it.copy(searchResult = emptyList(), searchTruncated = false) }
             return
         }
         // 搜索结果要跟随当前级别：六级词库包含了四级全部词条，
@@ -491,7 +493,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.IO) { repo.wordDb.search(keyword, stage) }
             // 防抖期间又切了级别：这次结果属于旧级别，丢弃
             if (repo.stage != stage) return@launch
-            _learn.update { it.copy(searchResult = result) }
+            // 命中数正好等于上限时，几乎一定还有匹配项没显示出来
+            // （例如搜常见字母「a」）。不标出来的话，用户会以为整个级别只有这些词。
+            _learn.update {
+                it.copy(
+                    searchResult = result,
+                    searchTruncated = result.size >= WordDb.SEARCH_LIMIT
+                )
+            }
         }
     }
 
@@ -884,7 +893,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val state = _quiz.value
         val question = state.current ?: return
         if (state.selectedSet.isEmpty()) {
-            notify("请先选择至少一个译文")
+            notify("请先选择译文")
             return
         }
         val correct = state.selectedSet == question.answerSet
@@ -1073,6 +1082,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _fileError.value = null
     }
 
+    /**
+     * 把异常整理成能看的文案。
+     *
+     * 之前这里直接把 `exception.message` 丢进对话框正文，而 IO / Security / JSON
+     * 异常的 message 多是英文技术串（`Permission denied`、`End of input at character 0 of`），
+     * 标题「操作失败」配一行英文栈式描述，用户完全不知道该做什么。
+     *
+     * 规则：我们自己抛出的中文说明（BackupManager 的 require 文案）原样展示 ——
+     * 那些本来就是完整句子；其余异常包一句中文行动建议，技术细节降级成第二行，
+     * 方便用户复制给开发者排查。
+     */
+    private fun fileErrorMessage(action: String, error: Throwable): String {
+        val raw = error.message?.trim().orEmpty()
+        return if (raw.isNotEmpty() && raw.any { it in '一'..'龥' }) raw
+        else "$action，请检查本机存储空间是否充足、文件是否可读，然后重试。" +
+            "\n（技术信息：${raw.ifBlank { error.javaClass.simpleName }}）"
+    }
+
     private fun runFileTask(title: String, block: () -> File) {
         if (_fileBusy.value) return
         _fileBusy.value = true
@@ -1080,7 +1107,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 runCatching { withContext(Dispatchers.IO) { block() } }
                     .onSuccess { _fileDone.value = title to it.absolutePath }
-                    .onFailure { _fileError.value = it.message ?: it.toString() }
+                    .onFailure { _fileError.value = fileErrorMessage("没能完成这次文件操作", it) }
             } finally {
                 _fileBusy.value = false
             }
@@ -1105,7 +1132,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     if (files.isEmpty()) _fileError.value = "备份目录中还没有任何备份文件"
                     else onLoaded(files)
                 }
-                .onFailure { _fileError.value = it.message ?: it.toString() }
+                .onFailure { _fileError.value = fileErrorMessage("没能读取备份目录", it) }
         }
     }
 
@@ -1131,7 +1158,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         )
                     }
-                    .onFailure { _fileError.value = it.message ?: it.toString() }
+                    .onFailure { _fileError.value = fileErrorMessage("没能恢复数据", it) }
             } finally {
                 _fileBusy.value = false
             }

@@ -32,8 +32,10 @@ android {
         applicationId = "com.hdu.cetvocab"
         minSdk = 26
         targetSdk = 34
-        versionCode = 40
-        versionName = "1.3.9"
+        // 修订号满 10 进位：1.3.9 的这一版是全站文案修订（修订 +1 → 1.3.10），
+        // 按项目版本规则写成 v1.4.0。
+        versionCode = 41
+        versionName = "1.4.0"
         vectorDrawables { useSupportLibrary = true }
     }
 

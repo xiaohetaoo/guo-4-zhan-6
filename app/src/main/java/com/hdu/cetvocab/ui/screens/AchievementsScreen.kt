@@ -47,6 +47,7 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val ratio = if (total == 0) 0f
     else (unlockedCount.toFloat() / total).coerceIn(0f, 1f)
     val goldenCount = Achievements.ALL.count { it.tier == 3 && unlocked.containsKey(it.code) }
+    val goldenTotal = Achievements.ALL.count { it.tier == 3 }
 
     Column(modifier = Modifier.fillMaxSize()) {
         AppTopBar(
@@ -102,7 +103,9 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                     color = LocalAppColors.current.gold
                                 )
                                 Text(
-                                    text = "金色 $goldenCount",
+                                    // 与顶部「已解锁 N / 总数」同一写法：只写「金色 3」
+                                    // 分不清是已解锁 3 个，还是这一档一共 3 个。
+                                    text = "金色 $goldenCount / $goldenTotal",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = LocalAppColors.current.gold
                                 )

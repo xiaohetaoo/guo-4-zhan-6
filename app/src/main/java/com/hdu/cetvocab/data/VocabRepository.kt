@@ -90,12 +90,14 @@ class VocabRepository(context: Context) {
         get() = prefs.getBoolean(KEY_ANIM, true)
         set(value) = prefs.edit().putBoolean(KEY_ANIM, value).apply()
 
-    // ---------------- 掌握等级 ----------------
+    // ---------------- 熟练度等级 ----------------
 
-    /** 等级含义：0 未学 1 模糊 2 认识 3 熟悉 4 掌握 5 精通 */
+    /** 等级含义：0 未学 1 初识 2 认识 3 熟悉 4 掌握 5 精通 */
     fun levelLabel(level: Int): String = when (level) {
         0 -> "未学"
-        1 -> "模糊"
+        // 1 档原为「模糊」：学习卡上点的是「认识了」，翻到背面状态却显示「模糊」，
+        // 同一屏自相矛盾。现在按钮改叫「有印象」，这一档改叫「初识」，两者对得上。
+        1 -> "初识"
         2 -> "认识"
         3 -> "熟悉"
         4 -> "掌握"
@@ -132,7 +134,7 @@ class VocabRepository(context: Context) {
             .coerceIn(1.3, 2.8)
         val now = System.currentTimeMillis()
         val nextReviewTs = now + intervalDays * 86_400_000L
-        // level 仅用于 UI 展示（未学/模糊/认识/熟悉/掌握/精通），语义与旧版保持一致
+        // level 仅用于 UI 展示（未学/初识/认识/熟悉/掌握/精通），语义与旧版保持一致
         val newLevel = if (known) (s.level + 1).coerceAtMost(5) else 1
         userDb.markLearned(word.id, newLevel, nextReviewTs, ease, reps, intervalDays, correct = known)
         userDb.logStudy(word.id, known)
@@ -517,7 +519,7 @@ class VocabRepository(context: Context) {
         tryUnlock(Achievements.LEARN_3000, ov.totalLearned >= 3000)
         tryUnlock(Achievements.LEARN_5000, ov.totalLearned >= 5000)
 
-        // ---- 掌握词数 ----
+        // ---- 熟悉以上词数（level >= MASTER_LEVEL）----
         tryUnlock(Achievements.MASTER_50, ov.mastered >= 50)
         tryUnlock(Achievements.MASTER_100, ov.mastered >= 100)
         tryUnlock(Achievements.MASTER_200, ov.mastered >= 200)
@@ -677,9 +679,10 @@ class VocabRepository(context: Context) {
         private const val ID_BATCH = 500
 
         /**
-         * 「掌握」的最低等级。[levelLabel] 里 3 档文案是「熟悉」，
-         * 掌握词数（成就、总览）按 level >= 3 起算，两处必须用同一个常量，
-         * 不要再散着写魔法数字。
+         * 「熟悉以上」统计口径的最低等级。[levelLabel] 里 3 档文案就是「熟悉」，
+         * 熟悉以上词数（成就、总览、首页与「我的」页统计）按 level >= 3 起算，
+         * 两处必须用同一个常量，不要再散着写魔法数字。
+         * 注意：4 档的文案才是「掌握」，所以对外不能说这些词「已掌握」。
          */
         private const val MASTER_LEVEL = 3
 

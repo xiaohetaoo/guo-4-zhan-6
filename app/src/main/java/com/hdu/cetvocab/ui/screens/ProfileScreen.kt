@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Achievements
 import com.hdu.cetvocab.data.Tier
+import com.hdu.cetvocab.data.UNIT_QUIZ_COUNT
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
@@ -119,7 +120,9 @@ fun ProfileScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = "连续天",
+                            // 原为「连续天」三个字，是「连续打卡 N 天」被截断后的残句，
+                            // 而同一行右边已经把完整句子写出来了。
+                            text = "连续打卡",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -155,8 +158,10 @@ fun ProfileScreen(
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Tag(text = "已学 ${ov.totalLearned} 词")
+                            // 统计口径写「熟悉以上」：这一档按 level >= 3（熟悉）起算，
+                            // 而 levelLabel 的第 4 档才叫「掌握」，写「掌握 N 词」会和等级标签打架。
                             Tag(
-                                text = "掌握 ${ov.mastered} 词",
+                                text = "熟悉以上 ${ov.mastered} 词",
                                 container = LocalAppColors.current.cardMint,
                                 contentColor = LocalAppColors.current.success
                             )
@@ -233,7 +238,7 @@ fun ProfileScreen(
         item {
             TopicCard(
                 title = stringResource(R.string.quiz_topic_confusable),
-                desc = stringResource(R.string.quiz_topic_confusable_desc),
+                desc = stringResource(R.string.quiz_topic_confusable_desc, UNIT_QUIZ_COUNT),
                 container = LocalAppColors.current.cardSky,
                 actionLabel = stringResource(R.string.action_start_practice),
                 onClick = onOpenConfusable
@@ -243,7 +248,7 @@ fun ProfileScreen(
         item {
             TopicCard(
                 title = stringResource(R.string.quiz_topic_translation),
-                desc = stringResource(R.string.quiz_topic_translation_desc),
+                desc = stringResource(R.string.quiz_topic_translation_desc, UNIT_QUIZ_COUNT),
                 container = LocalAppColors.current.cardMint,
                 actionLabel = stringResource(R.string.action_start_practice),
                 onClick = onOpenTranslation
@@ -256,7 +261,7 @@ fun ProfileScreen(
         // 设置保留在页面右上角的齿轮图标。重复入口会让这一页越来越长。
         item {
             Text(
-                text = "本应用完全离线运行：词库、例句与助记内容全部内置，" +
+                text = "本应用完全离线运行：词库、例句与联想记忆内容全部内置，" +
                     "发音使用系统语音引擎，未申请网络权限，学习数据仅保存在本机。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

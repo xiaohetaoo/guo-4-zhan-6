@@ -31,24 +31,33 @@
     <string name="hint_search">搜索单词或中文释义</string>
 
     <!-- 学习 -->
-    <string name="study_empty_queue">这个队列没有单词</string>
+    <!-- 与 AppViewModel 入口点击时的提示同一句：原先这里写「这个队列没有单词」，
+         同一件事两种说法，而且「队列」是实现术语，用户看不到队列。 -->
+    <string name="study_empty_queue">这里暂时没有需要学习的单词</string>
     <string name="study_reveal">查看释义与例句</string>
     <string name="study_unknown">不认识</string>
-    <string name="study_known">认识了</string>
+    <!-- 按钮改名「有印象」：点完这一档 level=1，等级标签是「初识」。
+         原写法「认识了」和 level=2 的标签「认识」撞词，用户点完立刻看到「模糊」，
+         等于当面被系统反驳。 -->
+    <string name="study_known">有印象</string>
 
     <!-- 闯关 -->
     <string name="quiz_quit_title">退出本次闯关？</string>
     <string name="practice_quit_title">退出本次练习？</string>
-    <string name="action_back_practice">返回拓展练习</string>
+    <!-- 拓展练习从「我的」页进来，这个按钮落到的就是「我的」页（见 AppRoot 的 onOpenProfile）。
+         原写「返回拓展练习」读起来像回到练习题目列表，容易让人以为还能续上同一局。 -->
+    <string name="action_back_practice">返回「我的」</string>
     <string name="quiz_quit_message">本局进度与成绩不会保存。</string>
     <string name="action_continue_quiz">继续答题</string>
     <string name="action_start_challenge">开始挑战</string>
     <string name="action_start_practice">开始练习</string>
     <string name="quiz_lexicon_not_ready">词库尚未就绪</string>
     <string name="quiz_topic_confusable">易混词辨析</string>
-    <string name="quiz_topic_confusable_desc">给中文释义，从四个形近词中挑出正确单词 · 10 题</string>
+    <!-- 题数用 %1$d 占位，由调用方传 UNIT_QUIZ_COUNT：
+         写死「10 题」时改题数会漏改这一行，而闯关页的其它题数文案已经是常量插值了。 -->
+    <string name="quiz_topic_confusable_desc">给中文释义，从四个形近词中挑出正确单词 · %1$d 题</string>
     <string name="quiz_topic_translation">真题句子翻译</string>
-    <string name="quiz_topic_translation_desc">中文句选出全部正确译法，可多选 · 10 题</string>
+    <string name="quiz_topic_translation_desc">给出中文句子，选出全部正确译法，可多选 · %1$d 题</string>
     <!-- 拓展资源练习：入口在「我的」页成就卡下方，成绩不参与排行榜排名 -->
     <string name="profile_extension_title">拓展资源练习</string>
     <string name="profile_extension_note">专项巩固，随时可练 · 不计入排行榜排名</string>
@@ -59,7 +68,9 @@
 
     <!-- 设置 / 数据管理 -->
     <string name="reset_confirm_title">确认清空全部数据？</string>
-    <string name="reset_confirm_message">学习进度、闯关成绩、成就记录与应用设置（级别、每日目标、语速、图标与明暗模式）都会被删除，且无法恢复。</string>
+    <!-- 列举必须和 VocabRepository.resetAll() 的真实删除范围一致：
+         它走 prefs.edit().clear()，界面动效开关同样会被清掉，之前漏了这一项。 -->
+    <string name="reset_confirm_message">学习进度、闯关成绩、成就记录与应用设置（级别、每日目标、语速、界面动效、图标与明暗模式）都会被删除，且无法恢复。</string>
     <string name="action_reset_confirm">确认清空</string>
     <string name="restore_pick_title">选择要恢复的备份</string>
     <string name="restore_confirm_title">确认恢复数据？</string>
@@ -68,6 +79,8 @@
     <!-- 无障碍描述：自绘图标本身没有语义，需要由承载它的容器提供朗读文本 -->
     <string name="cd_fav_add">加入生词本</string>
     <string name="cd_fav_remove">从生词本移除</string>
-    <!-- 掌握等级圆点的无障碍描述，%1$d 为已点亮数量，%2$d 为总数 -->
-    <string name="cd_level_dots">掌握等级 %1$d/%2$d</string>
+    <!-- 熟练度圆点的无障碍描述，%1$d 为已点亮数量，%2$d 为总数 -->
+    <!-- 量表本身改名「熟练度」：0 未学到 5 精通六档里「掌握」是第 4 档，
+         再叫「掌握等级 3/5」就等于用第 4 档的名字命名整把尺子。 -->
+    <string name="cd_level_dots">熟练度 %1$d/%2$d</string>
 </resources>

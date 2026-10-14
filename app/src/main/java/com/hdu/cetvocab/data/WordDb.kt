@@ -156,7 +156,7 @@ class WordDb(private val context: Context) {
      * words.db 里有两行，只是 id / stage 不同），不过滤级别的话搜一个常见词
      * 会同时弹出两条一模一样的卡片。
      */
-    fun search(keyword: String, stage: Int, limit: Int = 60): List<Word> {
+    fun search(keyword: String, stage: Int, limit: Int = SEARCH_LIMIT): List<Word> {
         // LIKE 里的 % 与 _ 是通配符，用户直接输入这两个字符会被当成模式匹配，
         // 这里用 ESCAPE 转义，让它们按字面量匹配。
         val escaped = keyword.trim()
@@ -222,6 +222,13 @@ class WordDb(private val context: Context) {
 
     companion object {
         const val DB_NAME = "words.db"
+
+        /**
+         * 关键词搜索单次返回的上限。词库有 1.1 万行，搜一个常见字母能命中上千条，
+         * 全量加载会让列表明显掉帧。UI 必须在命中数等于这个上限时告诉用户「还有更多」，
+         * 否则用户会以为整个级别只有前 60 个词（见 LearnScreen 的结果计数行）。
+         */
+        const val SEARCH_LIMIT = 60
 
         /**
          * 应用偏好文件名。**词库安装标记与用户设置共用这一个 prefs 文件**，

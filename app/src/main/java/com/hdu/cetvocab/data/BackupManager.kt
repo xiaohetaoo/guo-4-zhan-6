@@ -281,7 +281,8 @@ class BackupManager(
         }
         val backupVersion = root.optInt("db_version", 0)
         require(backupVersion <= UserDb.DB_VERSION) {
-            "备份来自更新的应用版本（备份 v$backupVersion，当前 v${UserDb.DB_VERSION}），请先升级应用再恢复"
+            "这份备份的数据格式版本（v$backupVersion）比当前应用支持的（v${UserDb.DB_VERSION}）更新，" +
+                "请先升级「过四斩六」再恢复"
         }
 
         // 词库随版本更新，旧备份里的 word_id 可能已不存在于当前词库。

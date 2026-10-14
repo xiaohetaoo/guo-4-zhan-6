@@ -259,7 +259,9 @@ fun HomeScreen(
                     tint = MaterialTheme.colorScheme.primary
                 )
                 StatTile(
-                    label = "已掌握",
+                    // 与 levelLabel 对齐：这个数是按 `level >= 3`（熟悉）统计的，
+                    // 而 levelLabel 第 4 档才叫「掌握」，统计位统一写「熟悉以上」。
+                    label = "熟悉以上",
                     value = "${ov.mastered}",
                     unit = "词",
                     modifier = Modifier.weight(1f),

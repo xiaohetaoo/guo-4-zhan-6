@@ -273,7 +273,11 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "进入单词卡片时自动播放读音",
+                                // 说清两处触发点：这个开关同时控制学习卡片和闯关拼写题
+                                // （QuizScreen 出题时走同一个 speakAuto 入口）。
+                                // 原先只写「单词卡片」，用户为了安静复习关掉它，
+                                // 会发现拼写题也跟着不出声。
+                                text = "学习卡片与拼写题出现时自动播放读音",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -414,9 +418,17 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     SectionTitle(text = "数据来源与授权")
                     Spacer(Modifier.height(10.dp))
                     listOf(
-                        "四/六级大纲词汇：ECDICT（MIT 许可）标注的官方词表标签",
-                        "中文释义、英美音标、例句：开源词库 english-vocabulary",
-                        "词根词缀与形近词：由上述开源数据自动构建",
+                        // 逐条对应构建脚本 tools/build_words_db.py 的真实取材方式，
+                        // 不写「官方词表」这类无法核对的说法：
+                        // ECDICT 的 cet4/cet6 是社区维护字段，四/六级词表还并了教材词表，
+                        // 六级表包含全部四级词。联想记忆含大模型生成内容，必须主动披露。
+                        "四/六级词表：开源词典 ECDICT（MIT 许可）的 cet4 / cet6 标签，" +
+                            "并上开源词库 english-vocabulary 的教材词表后去重",
+                        "六级词表包含全部四级词，两级的单词卡片各自独立成行",
+                        "中文释义、英美音标、例句：开源词库 english-vocabulary 与 ECDICT",
+                        "词根词缀与形近词：由上述开源数据按词缀表自动构建",
+                        "联想记忆：精选助记由大模型生成、人工校对后内置，" +
+                            "其余由词根词缀与形近数据拼接，仅供记忆启发，不作为权威释义",
                         "图标与界面元素：应用内自行绘制，不含第三方图片素材"
                     ).forEach {
                         BulletRow(
@@ -435,7 +447,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     Spacer(Modifier.height(10.dp))
                     ActionRow(
                         title = "导出学习记录（CSV）",
-                        desc = "含掌握等级、错误次数、上次学习与下次复习时间",
+                        desc = "含熟练度等级、错误次数、上次学习与下次复习时间",
                         iconKind = 1,
                         enabled = !fileBusy,
                         onClick = { vm.exportStudyCsv() }
@@ -514,7 +526,9 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     InfoRow("应用名称", "过四斩六")
                     InfoRow("版本", appVersionName() + "（离线版）")
                     InfoRow("网络权限", "未申请")
-                    InfoRow("词库规模", "四级 4750 词 / 六级 6248 词")
+                    // 六级表是「cet6 标签 ∪ 四级表」，所以 6248 里含全部 4750 个四级词；
+                    // 不写清楚容易被读成「两本共一万一千多个不同单词」。
+                    InfoRow("词库规模", "四级 4750 词 / 六级 6248 词（六级含全部四级词）")
                     InfoRow("开发环境", "Kotlin + Jetpack Compose")
                 }
             }

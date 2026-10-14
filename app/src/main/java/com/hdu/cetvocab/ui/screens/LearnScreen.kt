@@ -128,7 +128,7 @@ fun LearnScreen(
                                 )
                                 Spacer(Modifier.height(3.dp))
                                 Text(
-                                    text = "像好友列表一样按字母快速浏览 ${state.totalWords} 个词",
+                                    text = "像好友列表一样按字母快速浏览 ${state.totalWords} 个单词",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -177,12 +177,24 @@ fun LearnScreen(
         // ---------- 搜索结果 ----------
         if (state.query.isNotBlank()) {
             if (state.searchResult.isEmpty()) {
-                EmptyHint("没有找到匹配的单词", hint = "试试只输入前几个字母")
+                EmptyHint("没有找到匹配的单词", hint = "换个关键词试试，释义里的中文也能搜到")
             } else {
                 LazyColumn(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // 命中数等于 WordDb.SEARCH_LIMIT 时后面还有词条没显示出来
+                    // （搜常见字母极易触发）。不写这一行，用户会以为整个级别只有这 60 个词。
+                    item(key = "search_count") {
+                        Text(
+                            text = if (state.searchTruncated)
+                                "匹配较多，按字母序显示前 ${WordDb.SEARCH_LIMIT} 个单词 · 输入更完整的拼写可缩小范围"
+                            else "匹配 ${state.searchResult.size} 个单词",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                        )
+                    }
                     items(state.searchResult, key = { it.id }) { w ->
                         WordRow(w = w, level = state.levels[w.id] ?: 0, onClick = { onOpenWord(w.id) })
                     }
