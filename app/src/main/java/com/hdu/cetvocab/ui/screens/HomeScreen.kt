@@ -186,11 +186,14 @@ fun HomeScreen(
                                     "复习已还清 · 队列 ${state.queueCount} 词"
                                 progress >= 1f ->
                                     "复习已还清 · 今日额度用满"
-                                // 队列为空却还没达标，只可能是本级词已全部学过
-                                // （todayQueue = 到期词 + 补足到目标的新词）。
-                                // 这时不能说「今日额度用满」—— 今日一个都没学。
-                                else ->
+                                // 队列为空、目标也没达成时，要分清两种情况：
+                                // 本级真的全学完了（没有新词可补），还是每日目标被改成了
+                                // 非正数（`newWords(remain<=0)` 恒空，但词还在）。
+                                // 前者说「都已学过」，后者不能说「额度用满」也不能说学完。
+                                state.totalWords > 0 && state.stageLearned >= state.totalWords ->
                                     "本级 ${state.totalWords} 词都已学过 · 可切换别的级别"
+                                else ->
+                                    "今天没有排到要学的词 · 可提前学下一组新词"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -203,6 +206,8 @@ fun HomeScreen(
                 // 只是弹一句提示，但导航是无条件执行的，用户会被带进一个空的学习页。
                 val canStart = state.queueCount > 0
                 val goalReached = progress >= 1f
+                // 本级已无未学词（且词库非空）：此时 extraQueue 必然为空
+                val stageExhausted = state.totalWords > 0 && state.stageLearned >= state.totalWords
                 if (canStart) {
                     Button(
                         onClick = onStartToday,
@@ -226,24 +231,31 @@ fun HomeScreen(
                      */
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Tag(
-                            text = if (goalReached) "今日已完成" else "本级已学完",
+                            text = when {
+                                goalReached -> "今日已完成"
+                                stageExhausted -> "本级已学完"
+                                else -> "暂无待学"
+                            },
                             container = LocalAppColors.current.cardMint,
                             contentColor = LocalAppColors.current.success
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = if (goalReached) "想再学一批，可以提前学下一组新词"
-                            else "本级没有可学的新词了，可切换另一个级别",
+                            text = when {
+                                goalReached -> "想再学一批，可以提前学下一组新词"
+                                stageExhausted -> "本级没有可学的新词了，可切换另一个级别"
+                                else -> "每日目标为 0 时不会排新词，可在设置里调高目标"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     // 「继续学习」走的是 extraQueue = 到期词 + 预学新词。
-                    // 队列空又没达标时，到期词必然为 0、本级新词也必然为 0
-                    // （否则 todayQueue 就能凑出词来），extraQueue 同样必然是空 ——
+                    // 队列空、到期词为 0、本级又没有未学词时，extraQueue 必然也是空 ——
                     // 这时候摆一个整行的主按钮，点下去只弹一句「这里暂时没有需要学习的单词」，
-                    // 是个骗人的按钮，直接不渲染。
-                    if (goalReached) {
+                    // 是个骗人的按钮，直接不渲染。判据用 stageExhausted 而不是 goalReached：
+                    // 目标达成但本级还有未学词时该给按钮；目标被改成 0 而本级还有词时也该给。
+                    if (!stageExhausted) {
                         Spacer(Modifier.height(10.dp))
                         Button(
                             onClick = onStartExtra,

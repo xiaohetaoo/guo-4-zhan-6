@@ -36,8 +36,10 @@ android {
         // 按项目版本规则写成 v1.4.0。
         // v1.4.1 = 全量代码审查后的缺陷修订（冷启动占位、学习页重复压栈、
         // 搜索截断提示被吞、拓展练习退出落点、错误文案判定等），修订 +1。
-        versionCode = 42
-        versionName = "1.4.1"
+        // v1.4.2 = 对 v1.4.1 那批改动本身再审一遍的结果：加载遮罩吞掉手势
+        // （原先可穿透盲点底下页面）+ 首页空队列分支在每日目标被篡改为 0 时断言失实。
+        versionCode = 43
+        versionName = "1.4.2"
         vectorDrawables { useSupportLibrary = true }
     }
 

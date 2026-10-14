@@ -4,7 +4,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -279,7 +281,14 @@ private fun BootPlaceholder() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            // 遮罩必须自己吃掉手势：Compose 的命中测试会穿过没有输入处理的兄弟节点，
+            // 落到下面那层 AppNavHost 的真实内容上。首启要拷 7.98 MB 词库、窗口可达数秒，
+            // 用户点的是**看不见的控件** —— 首页的级别切换、词库的「浏览全部」与分段 tab
+            // 都在遮罩下面，点了会真的执行（切级别还会触发全量刷新）。
+            // 用 awaitEachGesture 逐事件 consume，而不是只挂 detectTapGestures：
+            // 后者只吞点击，横滑仍会冒到父层 Box 的 tabSwipe 上去切标签。
+            .swallowGestures(),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -297,6 +306,18 @@ private fun BootPlaceholder() {
         }
     }
 }
+
+/**
+ * 吞掉落在自身范围内的全部手势（见 [BootPlaceholder] 的说明）。
+ *
+ * 遮罩只是画在上层，Compose 的命中测试会穿过没有输入处理的兄弟节点，
+ * 落到下面那层 `AppNavHost` 的真实内容上，所以遮罩必须自己把事件吃掉。
+ * 两个探测器都要：`detectTapGestures` 吞点击（按下即被它消费，底下的 `clickable`
+ * 看到已消费事件会中止），`detectDragGestures` 吞横滑（否则拖动会冒到父层的 tabSwipe 上）。
+ */
+private fun Modifier.swallowGestures(): Modifier = this
+    .pointerInput(Unit) { detectTapGestures { } }
+    .pointerInput(Unit) { detectDragGestures(onDrag = { _, _ -> }) }
 
 @Composable
 private fun AppNavHost(
