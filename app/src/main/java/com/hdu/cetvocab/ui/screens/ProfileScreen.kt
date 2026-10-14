@@ -7,7 +7,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -60,6 +62,7 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfileScreen(
     vm: AppViewModel,
@@ -156,7 +159,13 @@ fun ProfileScreen(
                             maxLines = 2
                         )
                         Spacer(Modifier.height(10.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // 用 FlowRow 而不是 Row：文案从「掌握 N 词」加长成「熟悉以上 N 词」之后，
+                        // 两个标签在 360dp 宽的屏幕上只剩几 dp 余量，系统字体一放大
+                        // 就会被 Row 挤成竖排。FlowRow 让它整体换到下一行。
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             Tag(text = "已学 ${ov.totalLearned} 词")
                             // 统计口径写「熟悉以上」：这一档按 level >= 3（熟悉）起算，
                             // 而 levelLabel 的第 4 档才叫「掌握」，写「掌握 N 词」会和等级标签打架。
