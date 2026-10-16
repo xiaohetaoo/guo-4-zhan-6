@@ -1,9 +1,21 @@
 """打包源码与构建脚本（排除构建产物、机器相关配置与签名密钥）。"""
 import os
+import sys
 import zipfile
 
-SRC = r"D:\wby\46\CetVocab"
-OUT = r"D:\wby\46\交付物\过四斩六-源码与构建脚本.zip"
+# 路径口径与 tools 下其余脚本一致：命令行 SRC=... / OUT=... > 环境变量 > 按脚本位置推导。
+# 默认输出到工程同级目录的 dist/ 下，不会去猜某个人的「交付物」目录叫什么。
+def _resolve(cli_key, env_key, default):
+    for arg in sys.argv[1:]:
+        if arg.startswith(cli_key + "="):
+            return arg.split("=", 1)[1]
+    return os.environ.get(env_key) or default
+
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = _resolve("SRC", "CETVOCAB_PROJECT_DIR", _ROOT)
+OUT = _resolve("OUT", "CETVOCAB_SOURCE_ZIP",
+               os.path.join(os.path.dirname(_ROOT), "dist", "过四斩六-源码与构建脚本.zip"))
 
 SKIP_DIRS = {".gradle", "build", ".idea", ".kotlin", "intermediate"}
 SKIP_FILES = {"local.properties", "cetvocab-release.jks"}
@@ -32,6 +44,10 @@ def should_skip(rel):
 def main():
     count = 0
     total = 0
+    # 默认输出目录（工程同级的 dist/）可能还不存在，先建出来再写包
+    parent = os.path.dirname(os.path.abspath(OUT))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for item in INCLUDE_TOP:
             p = os.path.join(SRC, item)

@@ -81,6 +81,22 @@
 已被排除，但构建目录里其实没有这个文件（交付仓库`_github`有），
 以后在源码目录里`git init`就会把签名口令和 keystore 一起提交。
 
+### 仓库整理（不改变安装包，不占版本号）
+
+- `tools/build_words_db.py`、`tools/verify_db.py`、`tools/pack_source.py`
+不再写死某台机器上的绝对路径（原先是 `D:\wby\46\...` 与 `C:\Users\...`，
+别人 clone 下来第一步就跑不通）。统一改成「命令行 `DATA=`/`DB=`/`OUT=` → 环境变量
+`CETVOCAB_DATASET_DIR`/`CETVOCAB_WORDS_DB`/`CETVOCAB_SOURCE_ZIP` → 按脚本自身位置推导」三级取值，
+默认输出就是构建 APK 真正读的那份词库路径。
+- 数据集缺失时 `build_words_db.py` 改为直接列出还缺哪四个文件、去哪儿下、怎么指路径，
+而不是抛一个看不懂的 `FileNotFoundError`。
+- 删除 `tools/explore.py`：一次性探查脚本，硬编码作者机器的数据集目录、全仓库无人引用，
+留着只会让人以为重建词库需要它。
+- `README.md` 与 `README-构建说明.md`：目录结构补上 `translation_seed/`（322 条真题翻译题库源数据）
+与 `CHANGELOG.md`/`.gitignore`，去掉已删的 `explore.py`；
+「单元关每关10题」改成「每关最多10题」（与本轮 D1 的实际口径一致）；
+Releases 数量与链接改对（原先写 9 个、且用的是相对链接，从仓库根点出去是坏的）。
+
 ---
 
 ## [v1.4.3] - 2026-10-16

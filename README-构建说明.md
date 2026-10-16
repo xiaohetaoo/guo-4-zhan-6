@@ -58,10 +58,17 @@ CetVocab/
 └── tools/                        # 词库构建与校验脚本（Python）
     ├── build_words_db.py         # 七步数据流水线
     ├── verify_db.py              # PC 端 SQL 校验（与 App 同语句）
-    ├── explore.py                # 开源数据集探查
     ├── pack_source.py            # 源码打包脚本
+    ├── translation_seed/         # 真题句子翻译题库源数据（322 题，含选项与解析）
+    │   ├── cet4_1.py ~ cet4_5.py
+    │   ├── cet6_1.py ~ cet6_6.py
+    │   └── import_translation.py # 把上述题项写入 words.db 的 translation_bank 表
     └── data/mnemonics.json       # 586 条人工审核的精选谐音/联想
 ```
+
+> 三个脚本里的路径都**不写死某台机器的绝对路径**：一律按
+> 「命令行 `DATA=` / `OUT=` / `DB=` 参数 → 环境变量 → 由脚本自身位置推导」的顺序取值。
+> 只跑应用不需要重建词库，`app/src/main/assets/words.db` 已随仓库分发。
 
 ---
 
@@ -116,10 +123,23 @@ gradle assembleRelease
 6. 用编辑距离算法计算形近词；
 7. 建索引后`VACUUM`压缩，输出SQLite。
 
+第 8 步之后还有一道：`tools/translation_seed/` 里的 322 条真题句子翻译题，
+由 `tools/translation_seed/import_translation.py` 写进 `words.db` 的 `translation_bank` 表
+（「真题句子翻译」拓展练习的题库就是它）。
+
+两个开源数据集（ECDICT 与 english-vocabulary 的导出文件）**不随仓库分发**，
+重建词库时需要自行下载并用参数指过来：
+
 ```bash
-python tools/build_words_db.py
+python tools/build_words_db.py DATA=/path/to/datasets
+# 也可用环境变量：CETVOCAB_DATASET_DIR=/path/to/datasets
+# 词库输出位置默认就是 app/src/main/assets/words.db，可用 OUT= 改
 python tools/verify_db.py        # 用与 App 完全相同的 SQL 语句做校验
+python tools/pack_source.py      # 打源码包，输出位置用 OUT= 指定
 ```
+
+数据集缺失时 `build_words_db.py` 会直接列出还缺哪几个文件、去哪儿下、怎么指路径，
+而不是抛一个看不懂的 FileNotFoundError。
 
 ---
 

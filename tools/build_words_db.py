@@ -15,8 +15,38 @@
 """
 import csv, json, os, re, sqlite3, sys, collections
 
-DATA = r"C:\Users\67153\AppData\Local\AndroidBuild\data"
-OUT = r"D:\wby\46\CetVocab\app\src\main\assets\words.db"
+# 路径不写死某台机器的绝对路径：本仓库是公开的，别人 clone 下来要能直接跑。
+# 优先级：命令行 `DATA=<目录>` / `OUT=<文件>` > 环境变量 > 按脚本位置推导的默认值。
+# 默认 OUT 直接落在 app/src/main/assets/words.db，也就是构建 APK 时真正读的那一份。
+def _resolve(cli_key, env_key, default):
+    for arg in sys.argv[1:]:
+        if arg.startswith(cli_key + "="):
+            return arg.split("=", 1)[1]
+    return os.environ.get(env_key) or default
+
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA = _resolve("DATA", "CETVOCAB_DATASET_DIR",
+                os.path.join(os.path.dirname(_ROOT), "_datasets"))
+OUT = _resolve("OUT", "CETVOCAB_WORDS_DB",
+               os.path.join(_ROOT, "app", "src", "main", "assets", "words.db"))
+
+# 开源数据集（ECDICT 与 english-vocabulary 的导出文件）不随仓库分发，
+# 缺文件时直接说清要准备哪四个文件、放哪、怎么指过来，
+# 而不是让 csv.open 抛一个看不懂的 FileNotFoundError。
+_REQUIRED = ("ecdict.csv", "tb_vocabulary.json", "tb_voc_book.json", "tb_voc_examples.json")
+_missing = [f for f in _REQUIRED if not os.path.isfile(os.path.join(DATA, f))]
+if _missing:
+    sys.exit(
+        "找不到开源数据集文件：%s\n"
+        "  当前查找目录：%s\n"
+        "  准备方式：下载 ECDICT（github.com/skywind3000/ECDICT，MIT）与\n"
+        "           english-vocabulary（github.com/zhenghaoyang24/english-vocabulary）的导出数据，\n"
+        "  然后把目录指过来：python tools/build_words_db.py DATA=/path/to/datasets\n"
+        "  或设置环境变量 CETVOCAB_DATASET_DIR=/path/to/datasets\n"
+        "（成品词库已随仓库分发在 app/src/main/assets/words.db，只跑应用不需要重建词库。）"
+        % ("、".join(_missing), DATA)
+    )
 
 WORDS_PER_UNIT = 50
 STAGE_CET4, STAGE_CET6 = 1, 2

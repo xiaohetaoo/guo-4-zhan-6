@@ -5,7 +5,20 @@
 """
 import sqlite3, os, sys
 
-DB = r"D:\wby\46\CetVocab\app\src\main\assets\words.db"
+# 与 build_words_db.py 同一套路径口径：命令行 DB=... > 环境变量 > 按脚本位置推导，
+# 不写死某台机器的绝对路径（默认就是构建 APK 时真正读的那份词库）。
+def _resolve(cli_key, env_key, default):
+    for arg in sys.argv[1:]:
+        if arg.startswith(cli_key + "="):
+            return arg.split("=", 1)[1]
+    return os.environ.get(env_key) or default
+
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB = _resolve("DB", "CETVOCAB_WORDS_DB",
+              os.path.join(_ROOT, "app", "src", "main", "assets", "words.db"))
+if not os.path.isfile(DB):
+    sys.exit("找不到要校验的词库：%s\n  可用 `python tools/verify_db.py DB=/path/to/words.db` 指定。" % DB)
 ok = True
 
 
