@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.hdu.cetvocab.data.Achievements
@@ -52,7 +53,7 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         AppTopBar(
             title = "成就墙",
-            subtitle = "已解锁 $unlockedCount / $total 个成就",
+            subtitle = "已解锁${unlockedCount}/${total}个成就",
             onBack = onBack
         )
 
@@ -105,7 +106,7 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                 Text(
                                     // 与顶部「已解锁 N / 总数」同一写法：只写「金色 3」
                                     // 分不清是已解锁 3 个，还是这一档一共 3 个。
-                                    text = "金色 $goldenCount / $goldenTotal",
+                                    text = "金色${goldenCount}/${goldenTotal}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = LocalAppColors.current.gold
                                 )
@@ -130,7 +131,11 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         text = def.desc,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // 三列网格每格只有约 94dp 宽，「作答 200 题以上且正确率达到 98%」
+                        // 这类长说明两行装不下。不设 overflow 时被裁得没有痕迹，
+                        // 用户不知道后面还有字；加 Ellipsis 至少表明「这里没显示完」。
                         maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
                 }

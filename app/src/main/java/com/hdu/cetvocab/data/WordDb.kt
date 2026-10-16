@@ -3,6 +3,7 @@ package com.hdu.cetvocab.data
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import java.io.File
+import java.io.FileOutputStream
 
 /**
  * 内置只读词库。
@@ -35,10 +36,41 @@ class WordDb(private val context: Context) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val installed = prefs.getInt(PREFS_DB_VERSION_KEY, 0)
             if (!out.exists() || installed != DB_VERSION) {
+                /*
+                 * 拷贝必须是「写临时文件 → fsync → rename → 最后才写标记」。
+                 *
+                 * 旧写法是 `out.outputStream()` 直接覆写目标文件，写完立刻把标记置成
+                 * DB_VERSION 并 apply()。apply() 只是把数据排进磁盘队列，Android 的
+                 * 写回缓存意味着「标记已落盘、词库内容还没落盘」是真实可达的状态：
+                 * 首启拷到一半断电或被迫重启后，标记显示「已装好」，磁盘上却是半截
+                 * words.db，之后每次冷启动都判定不需要重装，首个查询就抛异常，
+                 * 而 viewModelScope 没有异常处理器 —— 结果是不可逆的无限闪退循环，
+                 * 用户只能去系统设置里清除数据。
+                 *
+                 * 现在：内容没 fsync 完就不 rename，没 rename 就不写标记。
+                 * 任何一步被打断，下次启动看到的仍是「标记 != 版本」，会自动重拷。
+                 */
+                val tmp = File(context.filesDir, "$DB_NAME.tmp")
                 context.assets.open(DB_NAME).use { input ->
-                    out.outputStream().use { output -> input.copyTo(output, 128 * 1024) }
+                    FileOutputStream(tmp).use { output ->
+                        input.copyTo(output, 128 * 1024)
+                        output.flush()
+                        output.fd.sync()
+                    }
                 }
-                prefs.edit().putInt(PREFS_DB_VERSION_KEY, DB_VERSION).apply()
+                if (!tmp.renameTo(out)) {
+                    // rename 失败（极少数文件系统的跨设备情况）时退回原地重写，
+                    // 但仍以「先拷完再写标记」为不变式，不改变判定顺序
+                    context.assets.open(DB_NAME).use { input ->
+                        FileOutputStream(out).use { output ->
+                            input.copyTo(output, 128 * 1024)
+                            output.flush()
+                            output.fd.sync()
+                        }
+                    }
+                }
+                tmp.delete()
+                prefs.edit().putInt(PREFS_DB_VERSION_KEY, DB_VERSION).commit()
             }
             SQLiteDatabase.openDatabase(out.path, null, SQLiteDatabase.OPEN_READONLY)
                 .also { db = it }
@@ -148,6 +180,54 @@ class WordDb(private val context: Context) {
         open().rawQuery(
             "SELECT COUNT(DISTINCT unit) FROM words WHERE stage=?", arrayOf(stage.toString())
         ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    /**
+     * 「同一个单词」的代表 id：同一 word 文本在词库里可能有两行
+     * （四级 4750 词全部是六级 6248 词的子集），这里把每行都映射到该文本的最小 id。
+     *
+     * 存在的理由：学习记录表 word_state 以 word_id 为主键，一个词在四级学过、
+     * 又在六级再学一次会留下两行。统计与成就如果直接数行数，「累计学习 200 词」
+     * 其实只对应 100 个不同的单词，段位和 LEARN_* 成就都会被灌一倍水。
+     *
+     * 词库和用户数据是两个独立的 SQLite 文件，SQL 层 JOIN 不到一起，
+     * 所以在内存里做一次性映射（10998 条，约 200 KB），之后按 id 查表。
+     */
+    fun canonicalId(id: Int): Int = canonicalMap()[id] ?: id
+
+    /** 把一批 word_id 折算成「不同单词」的个数 */
+    fun distinctWordCount(ids: Collection<Int>): Int {
+        val map = canonicalMap()
+        val seen = HashSet<Int>(ids.size)
+        ids.forEach { seen.add(map[it] ?: it) }
+        return seen.size
+    }
+
+    @Volatile
+    private var canonicalIds: Map<Int, Int>? = null
+
+    private fun canonicalMap(): Map<Int, Int> {
+        canonicalIds?.let { return it }
+        return synchronized(openLock) {
+            canonicalIds ?: run {
+                val minIdOfWord = HashMap<String, Int>(7000)
+                open().rawQuery("SELECT word, MIN(id) FROM words GROUP BY word", null).use { c ->
+                    while (c.moveToNext()) {
+                        val w = c.getString(0) ?: continue
+                        minIdOfWord[w] = c.getInt(1)
+                    }
+                }
+                val map = HashMap<Int, Int>(12000)
+                open().rawQuery("SELECT id, word FROM words", null).use { c ->
+                    while (c.moveToNext()) {
+                        val w = c.getString(1) ?: continue
+                        map[c.getInt(0)] = minIdOfWord[w] ?: c.getInt(0)
+                    }
+                }
+                minIdOfWord.clear()
+                map.also { canonicalIds = it }
+            }
+        }
+    }
 
     /**
      * 按关键词搜索单词（英文或中文释义均可）。

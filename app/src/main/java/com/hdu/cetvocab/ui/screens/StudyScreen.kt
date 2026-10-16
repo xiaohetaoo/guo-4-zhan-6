@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.R
 import com.hdu.cetvocab.data.Word
+import com.hdu.cetvocab.data.percentOf
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
 import com.hdu.cetvocab.ui.components.AppCard
@@ -167,13 +168,13 @@ fun StudyScreen(
                 }
                 Tag(
                     // 与底部按钮同名，也和结算页的两块统计同名。
-                    text = "认识 ${state.knownCount}",
+                    text = "认识${state.knownCount}",
                     container = LocalAppColors.current.cardMint,
                     contentColor = LocalAppColors.current.success
                 )
                 Spacer(Modifier.width(6.dp))
                 Tag(
-                    text = "待加强 ${state.unknownCount}",
+                    text = "待加强${state.unknownCount}",
                     container = LocalAppColors.current.cardPeach,
                     contentColor = LocalAppColors.current.warning
                 )
@@ -335,7 +336,7 @@ private fun CardFront(
         padding = 24.dp
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Tag(text = "${com.hdu.cetvocab.data.WordDb.stageLabel(word.stage)} · 第 ${word.unit} 单元")
+            Tag(text = "${com.hdu.cetvocab.data.WordDb.stageLabel(word.stage)}、第${word.unit}单元")
             Spacer(Modifier.weight(1f))
             Box(
                 modifier = Modifier
@@ -509,7 +510,7 @@ private fun StudySummary(
     onFinish: () -> Unit
 ) {
     val total = known + unknown
-    val rate = if (total == 0) 0 else known * 100 / total
+    val rate = percentOf(known, total)
     // 结算页此前是「学完最后一题瞬间硬切」，没有任何过渡。
     // 这里给它一个「从 92% 弹到 100% + 淡入」的入场，收束感更完整。
     val enter = remember { Animatable(0f) }
@@ -547,7 +548,7 @@ private fun StudySummary(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "共 $total 个单词 · 认识 $rate%",
+                text = "共${total}个单词、认识${rate}%",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

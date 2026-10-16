@@ -200,6 +200,18 @@ class BackupManager(
             }
         )
         root.put(
+            "quiz_wrong",
+            queryArray("SELECT stage,kind,word_id,wrong_count,last_ts FROM quiz_wrong") { c ->
+                JSONObject().apply {
+                    put("stage", c.getInt(0))
+                    put("kind", c.getInt(1))
+                    put("word_id", c.getInt(2))
+                    put("wrong_count", c.getInt(3))
+                    put("last_ts", c.getLong(4))
+                }
+            }
+        )
+        root.put(
             "achievement",
             queryArray("SELECT code,unlocked_ts FROM achievement") { c ->
                 JSONObject().apply {
@@ -231,6 +243,7 @@ class BackupManager(
                 put("icon_style", prefs.getInt(KEY_ICON_STYLE, LauncherIcons.STYLE_DEFAULT))
                 put("theme_mode", prefs.getInt(KEY_THEME, VocabRepository.THEME_SYSTEM))
                 put("animations_enabled", prefs.getBoolean(KEY_ANIM, true))
+                put("sound_enabled", prefs.getBoolean(KEY_SOUND, true))
             }
         )
         file.writeText(root.toString(2))
@@ -279,9 +292,41 @@ class BackupManager(
         require(root.has("word_state") && root.has("study_log") && root.has("quiz_record")) {
             "「${file.name}」缺少必要的备份数据段，可能已损坏，已中止恢复（现有数据未做任何改动）"
         }
+        /*
+         * has() 只看键名，不看值。`"word_state": null`、`"word_state": {}`、
+         * `"word_state": [1,2]` 全都能通过上面那道检查，而 optJSONArray 对它们
+         * 一律返回 null，objects() 又把它变成空列表 —— 于是走到第 2 步无条件
+         * DELETE 五张表、再插入 0 行，最后提示「已恢复学习数据」。
+         * 手改过、被截断过、或者拿别的 App 同名键拼出来的 JSON，都会把用户进度清零。
+         * 所以必须确认这三段**真的解析成了数组**才允许继续。
+         */
+        val stateArr = root.optJSONArray("word_state")
+        val logArr = root.optJSONArray("study_log")
+        val quizArr = root.optJSONArray("quiz_record")
+        require(stateArr != null && logArr != null && quizArr != null) {
+            "「${file.name}」的数据段格式不是预期的数组，已中止恢复（现有数据未做任何改动）"
+        }
+        // 空数组同样是「合法但会把数据清光」的输入：一份没有任何学习记录的备份
+        // 与「损坏到记录段被抹掉」的备份在结构上无法区分，因此要求至少有一段非空。
+        require(stateArr.length() + logArr.length() + quizArr.length() > 0) {
+            "「${file.name}」里没有任何学习记录、闯关成绩或收藏，恢复它会清空现有数据，已中止。" +
+                "如果确实要清空，请用「设置→清空学习数据」。"
+        }
+        /*
+         * 错题集是**可选段**：v1.4.3 之前的备份里没有它，缺段必须照常恢复成功，
+         * 不能按「缺少必要数据段」中止。但只要这个键真写了值，就必须是数组 ——
+         * 写成 `"quiz_wrong": {}` 之类还照样往下走，就会落回上面那段注释描述的
+         * 「DELETE 全部 + 插入 0 行」陷阱：错题集被静默清空却提示恢复成功。
+         * 显式 null 与缺段同等对待（视为「没有待重做错题」），不会误伤老备份。
+         */
+        val wrongRaw = root.opt("quiz_wrong")
+        require(wrongRaw == null || wrongRaw == JSONObject.NULL || wrongRaw is JSONArray) {
+            "「${file.name}」的错题集数据段格式不是预期的数组，已中止恢复（现有数据未做任何改动）"
+        }
+        val wrongArr = wrongRaw as? JSONArray
         val backupVersion = root.optInt("db_version", 0)
         require(backupVersion <= UserDb.DB_VERSION) {
-            "这份备份的数据格式版本（v$backupVersion）比当前应用支持的（v${UserDb.DB_VERSION}）更新，" +
+            "这份备份的数据格式版本（v${backupVersion}）比当前应用支持的（v${UserDb.DB_VERSION}）更新，" +
                 "请先升级「过四斩六」再恢复"
         }
 
@@ -292,11 +337,11 @@ class BackupManager(
             wordDb.idsOfStage(WordDb.STAGE_CET4) + wordDb.idsOfStage(WordDb.STAGE_CET6)
             ).toHashSet()
 
-        val allStates = root.optJSONArray("word_state").objects()
+        val allStates = stateArr.objects()
         val states = allStates.filter { it.optInt("word_id", -1) in validIds }
-        val allLogs = root.optJSONArray("study_log").objects()
+        val allLogs = logArr.objects()
         val logs = allLogs.filter { it.optInt("word_id", -1) in validIds }
-        val quizzes = root.optJSONArray("quiz_record").objects()
+        val quizzes = quizArr.objects()
         val skipped = (allStates.size - states.size) + (allLogs.size - logs.size)
 
         // ---------- 2. 写回：整段包在一个事务里，中途失败会自动回滚 ----------
@@ -306,6 +351,9 @@ class BackupManager(
             db.execSQL("DELETE FROM word_state")
             db.execSQL("DELETE FROM study_log")
             db.execSQL("DELETE FROM quiz_record")
+            // 错题集无条件清空：老备份没有这一段时，语义就是「恢复后没有待重做错题」，
+            // 保留恢复前的残留会让用户以为老备份里也带着错题。
+            db.execSQL("DELETE FROM quiz_wrong")
             db.execSQL("DELETE FROM achievement")
             db.execSQL("DELETE FROM app_meta")
 
@@ -314,14 +362,21 @@ class BackupManager(
                     "word_state", null,
                     ContentValues().apply {
                         put("word_id", o.optInt("word_id"))
-                        put("level", o.optInt("level"))
-                        put("wrong_count", o.optInt("wrong_count"))
-                        put("fav", o.optInt("fav"))
-                        put("last_ts", o.optLong("last_ts"))
-                        put("next_review_ts", o.optLong("next_review_ts"))
-                        put("ease", o.optDouble("ease", 2.5))
-                        put("reps", o.optInt("reps", 0))
-                        put("interval_days", o.optInt("interval_days", 0))
+                        /*
+                         * 数值必须夹回合法区间。optInt 只会「读不出来给默认值」，
+                         * 不会拦下读得出来但非法的值：手改一个 level=7 之后，
+                         * 这条记录既不满足复习查询的 `level BETWEEN 1 AND 5`，
+                         * 也不满足新词查询的 `level = 0`，那个词就从复习和新词
+                         * 两头同时消失，只能回词库重学 —— 而用户看不出任何异常。
+                         */
+                        put("level", clampInt(o.optInt("level"), 0, 5))
+                        put("wrong_count", clampInt(o.optInt("wrong_count"), 0, Int.MAX_VALUE))
+                        put("fav", if (clampInt(o.optInt("fav"), 0, 1) == 1) 1 else 0)
+                        put("last_ts", o.optLong("last_ts").coerceAtLeast(0L))
+                        put("next_review_ts", o.optLong("next_review_ts").coerceAtLeast(0L))
+                        put("ease", clampDouble(o.optDouble("ease", 2.5), 1.3, 2.8))
+                        put("reps", clampInt(o.optInt("reps"), 0, Int.MAX_VALUE))
+                        put("interval_days", clampInt(o.optInt("interval_days"), 0, Int.MAX_VALUE))
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
@@ -333,9 +388,9 @@ class BackupManager(
                         // 刻意不写 id：让 SQLite 重新分配自增主键。
                         // 备份里的 id 可能与当前库的自增序列冲突，回填会导致后续插入撞主键。
                         put("word_id", o.optInt("word_id"))
-                        put("correct", o.optInt("correct"))
+                        put("correct", if (clampInt(o.optInt("correct"), 0, 1) == 1) 1 else 0)
                         put("day", o.optString("day"))
-                        put("ts", o.optLong("ts"))
+                        put("ts", o.optLong("ts").coerceAtLeast(0L))
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
@@ -344,19 +399,50 @@ class BackupManager(
                 db.insertWithOnConflict(
                     "quiz_record", null,
                     ContentValues().apply {
-                        put("stage", o.optInt("stage"))
-                        put("unit", o.optInt("unit"))
+                        // 闯关记录同样要夹：correct > total 会让「正确率」算出 130%，
+                        // 三星判定和 QUIZ_PERFECT 都会被这种值骗到
+                        val total = clampInt(o.optInt("total"), 0, Int.MAX_VALUE)
+                        put("stage", clampInt(o.optInt("stage"), 1, 2))
+                        /*
+                         * 下界必须是 [QUIZ_SCOPE_WRONG]（-103），不能图省事写 -1。
+                         * 早先这里写的是 clampInt(unit, -1, MAX)：拓展练习的记录 unit 是
+                         * -101 / -102，一次备份恢复就把它们统统夹成 -1，
+                         * 于是「易混词辨析做过 6 次」变成「全词挑战做过 6 次」并直接冒进排行榜
+                         * ——而这些记录本来是被 RANKED_ONLY 排除在排名口径之外的。
+                         */
+                        put("unit", clampInt(o.optInt("unit"), QUIZ_SCOPE_WRONG, Int.MAX_VALUE))
                         put("mode", o.optString("mode"))
-                        put("score", o.optInt("score"))
-                        put("total", o.optInt("total"))
-                        put("correct", o.optInt("correct"))
-                        put("max_combo", o.optInt("max_combo"))
-                        put("duration_ms", o.optLong("duration_ms"))
-                        put("ts", o.optLong("ts"))
+                        put("score", clampInt(o.optInt("score"), 0, Int.MAX_VALUE))
+                        put("total", total)
+                        put("correct", clampInt(o.optInt("correct"), 0, total))
+                        put("max_combo", clampInt(o.optInt("max_combo"), 0, total))
+                        put("duration_ms", o.optLong("duration_ms").coerceAtLeast(0L))
+                        put("ts", o.optLong("ts").coerceAtLeast(0L))
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
             }
+            // 错题集回填：只收「当前词库里还在的词」和「重做功能真会出的两种题型」。
+            // 题型限定在 MEANING / SPELLING：易混词与真题翻译从不进错题集，
+            // 备份里冒出别的 kind 只能是被改过的值，收进来只会变成出不了题的死记录。
+            wrongArr.objects()
+                .filter { it.optInt("word_id", -1) in validIds }
+                .filter { it.optInt("kind", -1) in 0..QuizKind.SPELLING.ordinal }
+                .forEach { o ->
+                    db.insertWithOnConflict(
+                        "quiz_wrong", null,
+                        ContentValues().apply {
+                            put("stage", clampInt(o.optInt("stage"), 1, 2))
+                            put("kind", o.optInt("kind"))
+                            put("word_id", o.optInt("word_id"))
+                            // 至少 1 次：夹成 0 会让「错得多的先练」的排序把这条排到最后，
+                            // 而它其实一次都没错，属于被改坏的数据
+                            put("wrong_count", clampInt(o.optInt("wrong_count"), 1, Int.MAX_VALUE))
+                            put("last_ts", o.optLong("last_ts").coerceAtLeast(0L))
+                        },
+                        SQLiteDatabase.CONFLICT_REPLACE
+                    )
+                }
             // 成就码必须过一遍当前版本的定义表再回填。
             // word_state / study_log 都做了有效性校验，成就却原样接收任意 code：
             // 恢复带回当前版本没有的成就码时，成就墙会显示「已解锁 100 / 81 个成就」，
@@ -414,6 +500,9 @@ class BackupManager(
                 if (p.has(KEY_ANIM)) {
                     putBoolean(KEY_ANIM, p.optBoolean(KEY_ANIM, true))
                 }
+                if (p.has(KEY_SOUND)) {
+                    putBoolean(KEY_SOUND, p.optBoolean(KEY_SOUND, true))
+                }
             }.commit()
         }
 
@@ -431,8 +520,13 @@ class BackupManager(
     }
 
     /** JSONArray -> List<JSONObject>；null 或元素类型不符时返回空列表 */
-    private fun JSONArray?.objects(): List<JSONObject> {
-        if (this == null) return emptyList()
+    /** 读出来是整数但可能越界的字段统一夹一刀，NaN/负数/超大值都落回合法区间 */
+    private fun clampInt(v: Int, min: Int, max: Int): Int = v.coerceIn(min, max)
+
+    private fun clampDouble(v: Double, min: Double, max: Double): Double =
+        if (v.isNaN() || v.isInfinite()) 2.5 else v.coerceIn(min, max)
+
+    private fun JSONArray?.objects(): List<JSONObject> {        if (this == null) return emptyList()
         val list = ArrayList<JSONObject>(length())
         for (i in 0 until length()) optJSONObject(i)?.let { list.add(it) }
         return list
@@ -464,6 +558,7 @@ class BackupManager(
         private const val KEY_STAGE = "stage"
         private const val KEY_GOAL = "daily_goal"
         private const val KEY_AUTOSPEAK = "auto_speak"
+        private const val KEY_SOUND = "sound_enabled"
         private const val KEY_RATE = "speech_rate"
         private const val KEY_UNIT = "current_unit"
         private const val KEY_ICON_STYLE = "icon_style"

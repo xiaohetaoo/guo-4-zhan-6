@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -72,7 +73,10 @@ import com.hdu.cetvocab.data.EXTENSION_QUIZ_SCOPES
 import com.hdu.cetvocab.data.QUIZ_SCOPE_ALL
 import com.hdu.cetvocab.data.QUIZ_SCOPE_CONFUSABLE
 import com.hdu.cetvocab.data.QUIZ_SCOPE_TRANSLATION
+import com.hdu.cetvocab.data.QUIZ_SCOPE_WRONG
 import com.hdu.cetvocab.data.QuizKind
+import com.hdu.cetvocab.data.durationText
+import com.hdu.cetvocab.data.percentOf
 import com.hdu.cetvocab.data.QuizQuestion
 import com.hdu.cetvocab.data.STAGE_QUIZ_COUNT
 import com.hdu.cetvocab.data.UNIT_QUIZ_COUNT
@@ -81,6 +85,7 @@ import com.hdu.cetvocab.data.quizScopeLabel
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.LetterItem
 import com.hdu.cetvocab.ui.QuizUiState
+import com.hdu.cetvocab.ui.RestorableQuiz
 import com.hdu.cetvocab.ui.components.AchievementBadge
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.BulletRow
@@ -129,6 +134,17 @@ fun QuizScreen(
         if (state.active && !state.finished) vm.onQuizScreenEnter()
     }
 
+    /*
+     * 「继续上一局」的数据。进程被系统回收后导航栈会把闯关页恢复出来，
+     * 但题目只在内存里，用户回来看到的是选关页、刚才那局无声消失。
+     * 这里在选关页顶部挂一条恢复入口 —— 刻意不自动恢复：快照在正常杀进程后
+     * 同样存在，自动塞回一局旧题会让用户觉得应用记住了他不想要的东西。
+     */
+    var restorable by remember { mutableStateOf<RestorableQuiz?>(null) }
+    LaunchedEffect(state.active, state.finished) {
+        restorable = if (!state.active && !state.finished) vm.peekRestorableQuiz() else null
+    }
+
     // 拦截系统返回键。
     // 此前完全没有拦截：答题中按返回键会直接离开页面，但 _quiz.active 仍为 true，
     // 再进来时计时/状态都停在原处，用户也不知道这一局到底算不算数。
@@ -138,10 +154,20 @@ fun QuizScreen(
     // 会把人带回**首页**，而结算页的按钮与文案都已经承诺「回我的」。
     // 退出落点必须按关卡类型统一判断，否则同一局游戏三条退出路径指向两个地方。
     val isExtensionQuiz = state.unit in EXTENSION_QUIZ_SCOPES
+    // 错题重做从排行榜进来，退出就该回排行榜：那里才显示「还剩几道待重做」。
+    // 走 onExit()（popBackStack）会被带回首页，用户得自己再找一遍入口。
+    val isRedoQuiz = state.unit == QUIZ_SCOPE_WRONG
+    fun quitTarget() {
+        when {
+            isExtensionQuiz -> onOpenProfile()
+            isRedoQuiz -> onOpenLeaderboard()
+            else -> onExit()
+        }
+    }
     BackHandler(enabled = state.active || state.finished) {
         if (state.finished) {
             vm.exitQuiz()
-            if (isExtensionQuiz) onOpenProfile() else onExit()
+            quitTarget()
         } else {
             confirmQuit = true
         }
@@ -158,6 +184,9 @@ fun QuizScreen(
                 when (state.unit) {
                     QUIZ_SCOPE_CONFUSABLE -> vm.startConfusableQuiz()
                     QUIZ_SCOPE_TRANSLATION -> vm.startTranslationQuiz()
+                    // 重做局再开一次 = 按**当前**错题集再练一遍：
+                    // 刚才答对的题已经移出去了，这一局只会剩下还没订正对的
+                    QUIZ_SCOPE_WRONG -> vm.startWrongRedo()
                     else -> {
                         // 首字母挑战重开时仍按该字母出题；单元 / 全词挑战沿用原来的范围值
                         val letter = state.letter
@@ -182,7 +211,9 @@ fun QuizScreen(
             stage = learn.stage,
             onPick = { vm.startLetterQuiz(it) },
             onFullStage = { vm.startQuiz(QUIZ_SCOPE_ALL) },
-            onOpenLeaderboard = onOpenLeaderboard
+            onOpenLeaderboard = onOpenLeaderboard,
+            restorable = restorable,
+            onResume = { vm.resumeQuiz(it) }
         )
     }
 
@@ -206,7 +237,10 @@ fun QuizScreen(
                     // 拓展练习中途退出同样要回「我的」：只 exitQuiz() 的话人停在闯关选关页，
                     // 而这一局是从「我的 → 易混词辨析 / 真题句子翻译」进来的。
                     vm.exitQuiz()
-                    if (isExtensionQuiz) onOpenProfile()
+                    // 中途放弃也要回到「这一局的来处」：拓展练习回「我的」，
+                    // 错题重做回排行榜（那里能立刻看到还剩几道）。
+                    // 普通闯关留在闯关页，方便直接再开一关。
+                    if (isExtensionQuiz || isRedoQuiz) quitTarget()
                 }) { Text(stringResource(R.string.action_quit)) }
             },
             dismissButton = {
@@ -226,7 +260,9 @@ private fun QuizPicker(
     stage: Int,
     onPick: (Char) -> Unit,
     onFullStage: () -> Unit,
-    onOpenLeaderboard: () -> Unit
+    onOpenLeaderboard: () -> Unit,
+    restorable: RestorableQuiz? = null,
+    onResume: (RestorableQuiz) -> Unit = {}
 ) {
     /*
      * 整页滑动：标题 / 玩法 / 全词挑战 / 排行榜入口与首字母网格放在**同一个**滚动容器里，
@@ -255,7 +291,7 @@ private fun QuizPicker(
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = "${WordDb.stageLabel(stage)}词库 · 每关 $UNIT_QUIZ_COUNT 题 · 选义 / 拼写两种题型",
+                    text = "${WordDb.stageLabel(stage)}词库、每关${UNIT_QUIZ_COUNT}题、选义/拼写两种题型",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -263,7 +299,7 @@ private fun QuizPicker(
                 AppCard(color = LocalAppColors.current.cardAmber, padding = 14.dp) {
                     Text(
                         text = "玩法：答对得分并累积连击，拼写题分值更高。" +
-                            "选择下方首字母开始 $UNIT_QUIZ_COUNT 题挑战。",
+                            "选择下方首字母开始${UNIT_QUIZ_COUNT}题挑战。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -280,7 +316,7 @@ private fun QuizPicker(
                             )
                             Spacer(Modifier.height(3.dp))
                             Text(
-                                text = "从本级全部单词中随机抽取 $STAGE_QUIZ_COUNT 题",
+                                text = "从本级全部单词中随机抽取${STAGE_QUIZ_COUNT}题",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -298,6 +334,30 @@ private fun QuizPicker(
                         accent = LocalAppColors.current.cardAmber,
                         onClick = onOpenLeaderboard
                     )
+                }
+            }
+        }
+
+        restorable?.let { r ->
+            item(key = "picker_resume", span = { GridItemSpan(maxLineSpan) }) {
+                AppCard(color = LocalAppColors.current.cardMint, padding = 14.dp) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "有一局没打完",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            Text(
+                                text = "答到第${r.index + 1}题，当前${r.score}分，约${r.remaining}分钟内可继续",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(onClick = { onResume(r) }) { Text("继续") }
+                    }
                 }
             }
         }
@@ -423,21 +483,21 @@ private fun QuizPlay(
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "第 ${state.index + 1} / ${state.total} 题",
+                        text = "第${state.index + 1}/${state.total}题",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 if (state.combo >= 2) {
                     Tag(
-                        text = "连击 ${state.combo}",
+                        text = "连击${state.combo}",
                         container = LocalAppColors.current.cardAmber,
                         contentColor = LocalAppColors.current.warning
                     )
                     Spacer(Modifier.width(6.dp))
                 }
                 Tag(
-                    text = "${state.score} 分",
+                    text = "${state.score}分",
                     container = LocalAppColors.current.cardPeach,
                     contentColor = MaterialTheme.colorScheme.primary
                 )
@@ -531,7 +591,7 @@ private fun QuizPlay(
                                     QuizKind.SPELLING ->
                                         if (ok) "拼写正确" else "正确答案：${q.word.word}"
                                     QuizKind.TRANSLATION ->
-                                        if (ok) "译法全部选对" else "正确译法共 ${q.answerSet.size} 项"
+                                        if (ok) "译法全部选对" else "正确译法共${q.answerSet.size}项"
                                     QuizKind.CONFUSABLE ->
                                         if (ok) "回答正确" else "正确答案：${q.options.getOrNull(q.correctIndex) ?: q.word.word}"
                                     else ->
@@ -546,7 +606,7 @@ private fun QuizPlay(
                         Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = if (q.kind == QuizKind.TRANSLATION) "关键词 ${q.word.word}" else q.word.word,
+                                text = if (q.kind == QuizKind.TRANSLATION) "关键词${q.word.word}" else q.word.word,
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -708,7 +768,7 @@ private fun QuizPlay(
  * 不加的话 TalkBack 会把 A、选项文本、勾选框拆成几个节点分别播报，听感支离破碎。
  */
 private fun optionLabel(index: Int, text: String): String =
-    "选项 ${('A'.code + index).toChar()}：$text"
+    "选项${('A'.code + index).toChar()}：${text}"
 
 private fun isSpellingCorrect(state: QuizUiState, q: QuizQuestion): Boolean =
     state.typed.trim().equals(q.word.word.trim(), ignoreCase = true)
@@ -838,11 +898,15 @@ private fun OptionRow(
             .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // 行上已经有 selectable（它会合并子节点）+ 本行的 contentDescription，
+        // 子节点必须从无障碍树里摘掉，否则 TalkBack 把「选项 A：apple」读完之后
+        // 又把合并上来的「A」「apple」各读一遍。
         Box(
             modifier = Modifier
                 .size(26.dp)
                 .clip(RoundedCornerShape(9.dp))
-                .background(content.copy(alpha = 0.16f)),
+                .background(content.copy(alpha = 0.16f))
+                .clearAndSetSemantics {},
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -857,7 +921,9 @@ private fun OptionRow(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = content,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .clearAndSetSemantics {}
         )
         if (revealed && isAnswer) {
             IconCheck(
@@ -1035,18 +1101,21 @@ private fun MultiOptionRow(
             .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // 动画值必须先在这里取 `by` 委托再传给 background()。
+        // 写成 `animateColorAsState(...).value` 塞进 background() 的参数位，
+        // 等于每帧都强制整行（含文案与勾选图标）跟着底色动画一起重组 ——
+        // 本文件其它三处都是 `by`，只有这里漏了。
+        val boxColor by animateColorAsState(
+            targetValue = if (checked) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.surface,
+            animationSpec = Motion.effects(),
+            label = "multiBox"
+        )
         Box(
             modifier = Modifier
                 .size(22.dp)
                 .clip(RoundedCornerShape(7.dp))
-                .background(
-                    animateColorAsState(
-                        targetValue = if (checked) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surface,
-                        animationSpec = Motion.effects(),
-                        label = "multiBox"
-                    ).value
-                )
+                .background(boxColor)
                 .border(
                     1.5.dp,
                     if (checked) MaterialTheme.colorScheme.primary
@@ -1120,7 +1189,7 @@ private fun SpellingQuestion(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "根据中文释义与发音拼写单词（${q.word.word.length} 个字母）",
+            text = "根据中文释义与发音拼写单词（${q.word.word.length}个字母）",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(),
@@ -1164,18 +1233,20 @@ private fun QuizResult(
     vm: AppViewModel
 ) {
     val total = state.total
-    val accuracy = if (total == 0) 0 else state.correctCount * 100 / total
+    val accuracy = percentOf(state.correctCount, total)
     val perfect = total > 0 && state.correctCount == total
-    val seconds = ((state.lastRecord?.durationMs ?: 0L) / 1000).toInt()
     // 拓展资源练习（易混词辨析 / 真题句子翻译）不进排行榜，
     // 结算页的文案、按钮与退出去向都要与普通闯关区分开：
     // 它们从「我的」页进来，退出时就回「我的」——
     // 早先这里调 onExit()（即 popBackStack），而进入用的是 goTab + popUpTo(HOME)，
     // 返回栈是 [首页, 闯关]，于是点「返回」被带回**首页**，与本页文案不符。
     val isExtension = state.unit in EXTENSION_QUIZ_SCOPES
+    // 错题重做：同样不进排行榜，但退出去向与拓展练习不同 —— 它是从排行榜进来的，
+    // 结束/退出都要回排行榜，那里才有更新后的错题数量。
+    val isRedo = state.isRedo
     fun leave() {
         vm.exitQuiz()
-        if (isExtension) onOpenProfile()
+        if (isRedo) onOpenLeaderboard() else if (isExtension) onOpenProfile()
     }
 
     Column(
@@ -1229,7 +1300,7 @@ private fun QuizResult(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = " 分",
+                            text = "分",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 8.dp)
@@ -1238,7 +1309,7 @@ private fun QuizResult(
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Tag(
-                        text = "正确率 $accuracy%",
+                        text = "正确率${accuracy}%",
                         container = if (accuracy >= 80) LocalAppColors.current.cardMint else LocalAppColors.current.cardPeach,
                         contentColor = if (accuracy >= 80) LocalAppColors.current.success else LocalAppColors.current.warning
                     )
@@ -1248,7 +1319,7 @@ private fun QuizResult(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ResultTile("答对", "${state.correctCount}/$total", Modifier.weight(1f))
                 ResultTile("最高连击", "${state.maxCombo}", Modifier.weight(1f))
-                ResultTile("用时", "${seconds}s", Modifier.weight(1f))
+                ResultTile("用时", durationText(state.elapsedMs), Modifier.weight(1f))
             }
         }
 
@@ -1267,15 +1338,25 @@ private fun QuizResult(
 
         Spacer(Modifier.height(14.dp))
         AppCard(
-            color = if (isExtension) LocalAppColors.current.cardSky
+            color = if (isExtension || isRedo) LocalAppColors.current.cardSky
             else LocalAppColors.current.cardMint,
             padding = 16.dp
         ) {
             Text(
-                text = if (isExtension) {
-                    "本次是拓展资源练习，成绩不计入排行榜排名，可以反复练到全对。"
-                } else {
-                    "本次成绩已记入「历次成绩排行榜」，可以随时和自己的历史最好成绩比较。"
+                text = when {
+                    isRedo -> {
+                        // remainingWrong 由结算时回查错题集得到（-1 表示没查到，不该出现）
+                        val left = if (state.remainingWrong >= 0) state.remainingWrong else 0
+                        if (left == 0) {
+                            "本次是错题重做，${total}题里答对${state.correctCount}题，" +
+                                "待重做的错题已经全部清完。成绩不计入排行榜与成就。"
+                        } else {
+                            "本次是错题重做，答对的${state.correctCount}题已移出错题集，" +
+                                "还剩${left}题待重做。成绩不计入排行榜与成就。"
+                        }
+                    }
+                    isExtension -> "本次是拓展资源练习，成绩不计入排行榜排名，可以反复练到全对。"
+                    else -> "本次成绩已记入「历次成绩排行榜」，可以随时和自己的历史最好成绩比较。"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface
@@ -1310,6 +1391,7 @@ private fun QuizResult(
         Spacer(Modifier.height(10.dp))
         Text(
             text = when {
+                isRedo -> "返回后可在排行榜看到还剩几道待重做"
                 isExtension -> "返回后可再次进入拓展练习"
                 state.letter != null -> "返回后可继续选择其他首字母"
                 state.unit == QUIZ_SCOPE_ALL -> "返回后可重新挑战本级全部词汇"

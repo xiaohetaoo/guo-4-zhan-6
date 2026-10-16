@@ -71,8 +71,19 @@ fun WordDetailScreen(
     val word by produceState<Word?>(initialValue = null, wordId) {
         value = withContext(Dispatchers.IO) { repo.wordDb.wordById(wordId) }
     }
-    var fav by remember { mutableStateOf(false) }
-    var level by remember { mutableStateOf(0) }
+    /*
+     * 收藏态与等级必须按 wordId 记忆，并显式区分「还没读到」。
+     *
+     * 旧写法是 `remember { mutableStateOf(false) }`（无 key）：从 A 词进 B 词时
+     * 这个 composable 并不重建，A 的收藏态会原样显示在 B 的页面上，
+     * 直到 B 的 IO 回来才纠正 —— 收藏过的词被画成未收藏、反之亦然，
+     * 用户就在这一两帧的错位里又点了一次，把 A 的收藏取消掉。
+     * 加上 key 之后仍需一个 loaded 标志：否则每次进详情页都先闪一下
+     * 「未收藏」，视觉上等同于「我的书签丢了」。
+     */
+    var fav by remember(wordId) { mutableStateOf(false) }
+    var favLoaded by remember(wordId) { mutableStateOf(false) }
+    var level by remember(wordId) { mutableStateOf(0) }
 
     LaunchedEffect(wordId) {
         withContext(Dispatchers.IO) {
@@ -80,6 +91,7 @@ fun WordDetailScreen(
             fav = st.fav
             level = st.level
         }
+        favLoaded = true
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -88,13 +100,14 @@ fun WordDetailScreen(
             // rank 是「按字母排序后的序号」（tools/build_words_db.py 里 rank = i + 1），
             // 不是词频也不是大纲编号；写成「第 N 词」会被读成「第 N 高频词」。
             subtitle = word?.let {
-                "${WordDb.stageLabel(it.stage)} · 第 ${it.unit} 单元 · 字母序第 ${it.rank} 位"
+                "${WordDb.stageLabel(it.stage)}、第${it.unit}单元、字母序第${it.rank}位"
             } ?: "",
             onBack = onBack,
             trailing = {
                 // 心形是自绘图标、没有内置语义，必须由外层容器给出朗读文本
+                val shownFav = favLoaded && fav
                 val favLabel = stringResource(
-                    if (fav) R.string.cd_fav_remove else R.string.cd_fav_add
+                    if (shownFav) R.string.cd_fav_remove else R.string.cd_fav_add
                 )
                 val favInteraction = remember { MutableInteractionSource() }
                 Box(
@@ -102,10 +115,11 @@ fun WordDetailScreen(
                         .size(38.dp)
                         .springPress(favInteraction, pressedScale = 0.86f)
                         .clip(RoundedCornerShape(13.dp))
-                        .background(if (fav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant)
+                        .background(if (shownFav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant)
                         .clickable(
                             interactionSource = favInteraction,
                             indication = null,
+                            enabled = favLoaded,
                             role = Role.Button
                         ) {
                             word?.let {
@@ -118,8 +132,8 @@ fun WordDetailScreen(
                 ) {
                     IconHeart(
                         modifier = Modifier.size(19.dp),
-                        filled = fav,
-                        color = if (fav) LocalAppColors.current.warning
+                        filled = shownFav,
+                        color = if (shownFav) LocalAppColors.current.warning
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -258,7 +272,7 @@ fun WordDetailScreen(
                     SpeakButton(text = w.sentence.ifBlank { w.word }, onSpeak = speak, size = 40.dp, filled = false)
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        text = "朗读单词 / 例句",
+                        text = "朗读单词/例句",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

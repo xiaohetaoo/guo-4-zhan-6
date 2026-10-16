@@ -9,11 +9,21 @@ import com.hdu.cetvocab.data.BackupManager
 import com.hdu.cetvocab.data.DayStat
 import com.hdu.cetvocab.data.QUIZ_SCOPE_CONFUSABLE
 import com.hdu.cetvocab.data.QUIZ_SCOPE_TRANSLATION
+import com.hdu.cetvocab.data.QUIZ_SCOPE_WRONG
 import com.hdu.cetvocab.data.QuizKind
+import com.hdu.cetvocab.data.QuizSpec
 import com.hdu.cetvocab.data.QuizAggregate
 import com.hdu.cetvocab.data.QuizQuestion
 import com.hdu.cetvocab.data.QuizRecord
+import com.hdu.cetvocab.data.QUIZ_SPEC_CONFUSABLE
+import com.hdu.cetvocab.data.QUIZ_SPEC_LETTER
+import com.hdu.cetvocab.data.QUIZ_SPEC_STAGE
+import com.hdu.cetvocab.data.QUIZ_SPEC_TRANSLATION
+import com.hdu.cetvocab.data.QUIZ_SPEC_UNIT
+import com.hdu.cetvocab.data.QUIZ_SPEC_WRONG
 import com.hdu.cetvocab.data.STAGE_QUIZ_COUNT
+import com.hdu.cetvocab.data.WRONG_REDO_LIMIT
+import com.hdu.cetvocab.data.WRONG_STUDY_LIMIT
 import com.hdu.cetvocab.data.StudyOverview
 import com.hdu.cetvocab.data.UNIT_QUIZ_COUNT
 import com.hdu.cetvocab.data.VocabRepository
@@ -23,6 +33,7 @@ import com.hdu.cetvocab.data.quizLetterOfScope
 import com.hdu.cetvocab.data.quizScopeOfLetter
 import com.hdu.cetvocab.ui.theme.Motion
 import com.hdu.cetvocab.util.LauncherIcons
+import com.hdu.cetvocab.util.Sfx
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -32,6 +43,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 
 // ---------------- UI 状态 ----------------
@@ -109,6 +121,19 @@ data class StudyUiState(
     val total: Int get() = queue.size
 }
 
+/** 选关页用来挂「继续上一局」提示条的信息 */
+data class RestorableQuiz(
+    val spec: QuizSpec,
+    val index: Int,
+    val score: Int,
+    val correct: Int,
+    val combo: Int,
+    val maxCombo: Int,
+    val elapsedMs: Long,
+    /** 快照还能用多久（分钟），用来把提示写得具体 */
+    val remaining: Int
+)
+
 data class QuizUiState(
     val active: Boolean = false,
     val stage: Int = WordDb.STAGE_CET4,
@@ -129,6 +154,13 @@ data class QuizUiState(
     val combo: Int = 0,
     val maxCombo: Int = 0,
     val finished: Boolean = false,
+    /**
+     * 本局是不是「错题重做」。决定三件事：结算页的文案、要不要写成绩、要不要评成就。
+     * 由 [openQuiz] 从 spec.kind 推导，不单独传参，避免两处口径打架。
+     */
+    val isRedo: Boolean = false,
+    /** 重做结算后错题集还剩几道；-1 表示本局不是重做，结算页不显示这一行 */
+    val remainingWrong: Int = -1,
     /**
      * 已累计的答题用时（毫秒）。
      * 不用「当前时间 - 开始时间」结算，是因为那样会把用户切到别的页面、
@@ -158,7 +190,14 @@ data class ProfileUiState(
     val themeMode: Int = VocabRepository.THEME_SYSTEM,
     /** 界面动效开关（设置页）。false 时转场、弹簧与按压回弹全部退化为瞬间落位。 */
     val animationsEnabled: Boolean = true,
+    /** 闯关答题音效开关（设置页） */
+    val soundEnabled: Boolean = true,
     val leaderboard: List<QuizRecord> = emptyList(),
+    /**
+     * 当前级别待重做的闯关错题数，排行榜顶部的汇总卡用它。
+     * 与「错词本」是两个口径：错词本来自学习卡片的答错计数，这里只收闯关答错的题。
+     */
+    val wrongRedoCount: Int = 0,
     /**
      * 排行榜顶部统计的聚合口径（次数 / 最高分 / 平均分 / 最高正确率）。
      * 由 SQL 在**全表**上算，不受 [leaderboard] 最多 50 条的限制。
@@ -171,6 +210,15 @@ data class ProfileUiState(
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo: VocabRepository = (app as CetVocabApp).repo
+
+    /**
+     * 闯关答题提示音。
+     *
+     * 挂在 ViewModel 而不是 Composable 里：一次作答的判定发生在数据层回调里，
+     * 若交给页面，切后台、重组、退出重进都可能把声音漏掉或重放。
+     * 初值直接读偏好，避免设置里关了音效、首帧却又响一声。
+     */
+    private val sfx = Sfx(app).apply { enabled = repo.soundEnabled }
 
     /** 数据导出与备份/恢复（文件写入应用外部私有目录，无需存储权限） */
     val backup: BackupManager by lazy { BackupManager(getApplication(), repo.userDb, repo.wordDb) }
@@ -220,6 +268,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 闯关结算中标志：保证一次闯关只写入一条成绩记录 */
     private var finishing = false
 
+    /**
+     * 闯关会话序号。openQuiz 每局自增，finishQuiz 在写库前捕获它，
+     * 回写结算态时比对 —— 只有仍是同一局才写入。
+     *
+     * 没有这个序号时会出现「幽灵结算页」：saveQuizRecord 是不可取消的阻塞 IO，
+     * 玩家打完末题后立刻退出并开新一局，上一局的回写在新局状态上仍然满足
+     * `active && !finished`，于是把上一局的 stars / 得分 / finished
+     * 盖到刚开的新局上，玩家看到的是新一局直接弹出上一局的结算页。
+     */
+    private var quizSession = 0L
+
+    /** 当前局的出题配方，用于进程被回收后重放 */
+    private var quizSpec: QuizSpec? = null
+
     /** 当前题目的起始时刻；0 表示计时处于暂停态（应用在后台、或闯关页不在前台） */
     private var questionStartTs = 0L
 
@@ -251,6 +313,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun notify(msg: String) {
         _toast.value = msg
     }
+
+    /** 供非 ViewModel 持有者（如 AppRoot 里的发音回调）触发一次提示 */
+    fun toast(msg: String) = notify(msg)
 
     // ---------- 首页 ----------
 
@@ -352,6 +417,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _profile.update { it.copy(animationsEnabled = enabled) }
     }
 
+    /**
+     * 答题音效开关。写偏好 + 立即改 [sfx] 的标志 + 回写 UI 三件事一起做：
+     * 只写偏好的话，用户关掉开关后本局仍会继续响，听起来就是开关没生效。
+     */
+    fun setSoundEnabled(enabled: Boolean) {
+        repo.soundEnabled = enabled
+        sfx.enabled = enabled
+        _profile.update { it.copy(soundEnabled = enabled) }
+    }
+
     fun resetAll() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { repo.resetAll() }
@@ -425,7 +500,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     learnedWords = allWords.count { (states[it.id]?.level ?: 0) > 0 },
                     levels = levels,
                     favWords = repo.favWords(),
-                    wrongWords = repo.wrongWords(40)
+                    wrongWords = repo.wrongWords(WRONG_STUDY_LIMIT)
                 )
             }
             // 用 copy 合并，而不是 `_learn.value = data` 整体替换：
@@ -541,7 +616,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun startUnitStudy(unit: Int, onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val queue = withContext(Dispatchers.IO) { repo.unitWords(unit) }
-            startQueue("第 $unit 单元", queue, onReady)
+            startQueue("第${unit}单元", queue, onReady)
         }
     }
 
@@ -559,7 +634,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startWrongStudy(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val queue = withContext(Dispatchers.IO) { repo.wrongWords(50) }
+            val queue = withContext(Dispatchers.IO) { repo.wrongWords(WRONG_STUDY_LIMIT) }
             if (queue.isEmpty()) {
                 notify("暂时没有错词记录")
                 onReady(false)
@@ -679,7 +754,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun finishStudy() {
         val state = _study.value
         val gained = state.newAchievements
-        _study.value = StudyUiState()
+        /*
+         * 这里刻意**不**把 _study 重置成空态。
+         *
+         * 旧实现先清态、再由调用方 popBackStack()：pop 之后学习页还要播完约 250ms
+         * 的退场动画，而它在这整个动画期间读的就是刚被清空的状态，于是每次点「完成」
+         * 都能看到一个结算页滑出、换成「本组暂无单词」空态的画面。
+         * 清态交给下一次 startStudy（它本来就会整体赋值新的 StudyUiState），
+         * 退出动画期间保留结算页，才是用户期望看到的东西。
+         */
         refreshAll()
         if (gained.isNotEmpty()) {
             notify("解锁成就：" + gained.joinToString("、") { it.title })
@@ -797,32 +880,198 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         challengeStage: Int,
         unit: Int,
         questions: List<QuizQuestion>,
+        spec: QuizSpec,
         onReady: (Boolean) -> Unit = {}
     ) {
         finishJob?.cancel()
         finishJob = null
         finishing = false
+        // 每开一局换一个新的会话号：上一局尚未写完的结算结果据此作废
+        quizSession++
         _quiz.value = QuizUiState(
             active = true,
             stage = challengeStage,
             unit = unit,
-            questions = questions
+            questions = questions,
+            isRedo = spec.kind == QUIZ_SPEC_WRONG
         )
         questionStartTs = System.currentTimeMillis()
+        quizSpec = spec
+        saveQuizSnapshot()
         onReady(true)
+    }
+
+    /**
+     * 把「当前这一局」记进 prefs。
+     *
+     * 只存配方和进度，不存题目：题目由 seed 重放（词库只读、取词全部带
+     * ORDER BY，同 seed 必得同题序），所以一条几百字节的 JSON 就够。
+     */
+    private fun saveQuizSnapshot() {
+        val spec = quizSpec ?: return
+        val s = _quiz.value
+        if (!s.active || s.finished) return
+        val json = JSONObject().apply {
+            put("kind", spec.kind)
+            put("stage", spec.stage)
+            put("unit", spec.unit)
+            put("count", spec.count)
+            put("seed", spec.seed)
+            // 只有错题重做局需要把题目清单一起存：它的题序依赖错题集当时的内容，
+            // 而错题集会在重做过程中缩小（见 QuizSpec.refs）。其余关卡留空不写，
+            // 免得每条快照都白白多背两三百字节。
+            if (spec.refs.isNotEmpty()) put("refs", spec.refs)
+            put("index", s.index)
+            put("score", s.score)
+            put("correct", s.correctCount)
+            put("combo", s.combo)
+            put("maxCombo", s.maxCombo)
+            put("elapsed", s.elapsedMs)
+            put("ts", System.currentTimeMillis())
+        }
+        repo.quizSessionSnapshot = json.toString()
+    }
+
+    private fun clearQuizSnapshot() {
+        quizSpec = null
+        repo.quizSessionSnapshot = null
+    }
+
+    /**
+     * 读取并校验可恢复的上一局（不改变任何状态，供选关页决定要不要挂提示条）。
+     *
+     * 刻意做成「用户点一下才继续」而不是自动重放：快照在正常杀进程后同样存在，
+     * 自动恢复会让用户点「闯关」标签时莫名其妙被塞进一局旧题，
+     * 以为应用记住了他不想要的东西。
+     */
+    fun peekRestorableQuiz(): RestorableQuiz? {
+        if (_quiz.value.active) return null
+        val raw = repo.quizSessionSnapshot ?: return null
+        val obj = runCatching { JSONObject(raw) }.getOrNull() ?: run {
+            clearQuizSnapshot()
+            return null
+        }
+        val ts = obj.optLong("ts", 0L)
+        // 超过 30 分钟就当作「用户已经不记得这一局了」，直接丢弃快照
+        if (ts <= 0L || System.currentTimeMillis() - ts > RESTORE_WINDOW_MS) {
+            clearQuizSnapshot()
+            return null
+        }
+        val spec = QuizSpec(
+            kind = obj.optInt("kind", -1),
+            stage = obj.optInt("stage", -1),
+            unit = obj.optInt("unit", Int.MIN_VALUE),
+            count = obj.optInt("count", 0),
+            seed = obj.optLong("seed", 0L),
+            refs = obj.optString("refs", "")
+        )
+        if (spec.kind !in 0..QUIZ_SPEC_WRONG || spec.count <= 0 ||
+            spec.unit == Int.MIN_VALUE || spec.stage != repo.stage
+        ) {
+            // 级别对不上时不恢复：把四级的题算进六级的进度比丢掉一局更糟
+            clearQuizSnapshot()
+            return null
+        }
+        // 重做局的题目完全来自 refs，缺了它就没法原样重放，只能放弃恢复
+        if (spec.kind == QUIZ_SPEC_WRONG && spec.refs.isEmpty()) {
+            clearQuizSnapshot()
+            return null
+        }
+        return RestorableQuiz(
+            spec = spec,
+            index = obj.optInt("index", 0),
+            score = obj.optInt("score", 0),
+            correct = obj.optInt("correct", 0),
+            combo = obj.optInt("combo", 0),
+            maxCombo = obj.optInt("maxCombo", 0),
+            elapsedMs = obj.optLong("elapsed", 0L),
+            remaining = ((RESTORE_WINDOW_MS - (System.currentTimeMillis() - ts)) / 60_000L).toInt().coerceAtLeast(0) + 1
+        )
+    }
+
+    /**
+     * 按配方重放上一局。
+     *
+     * 词库是随包的只读 SQLite，取词一律带 ORDER BY（words 按 "rank"、
+     * 翻译题库按 id），rank 在本级内唯一，因此同一个 seed 走同一条 shuffle 链
+     * 必然得到同一份题序 —— 不需要把题目本身存下来，一条配方 JSON 就够。
+     * 重放结果与快照题数对不上时（词库或出题算法变过）放弃恢复，绝不凑合。
+     */
+    fun resumeQuiz(from: RestorableQuiz) {
+        if (_quiz.value.active) return
+        viewModelScope.launch {
+            val questions = withContext(Dispatchers.IO) { repo.rebuildQuiz(from.spec) }
+            if (questions.size != from.spec.count) {
+                clearQuizSnapshot()
+                notify("上一局的题目已无法还原，已为你开始新的选关")
+                return@launch
+            }
+            val index = from.index.coerceIn(0, questions.size - 1)
+            _quiz.value = QuizUiState(
+                active = true,
+                stage = from.spec.stage,
+                unit = from.spec.unit,
+                questions = questions,
+                index = index,
+                score = from.score,
+                correctCount = from.correct,
+                combo = from.combo,
+                maxCombo = from.maxCombo,
+                elapsedMs = from.elapsedMs
+            )
+            quizSpec = from.spec
+            questionStartTs = System.currentTimeMillis()
+            saveQuizSnapshot()
+            notify("已恢复上次未完成的闯关，从第${index + 1}题继续")
+        }
     }
 
     fun startQuiz(unit: Int) {
         viewModelScope.launch {
             val challengeStage = repo.stage
+            val seed = System.nanoTime()
+            val count = if (unit < 0) STAGE_QUIZ_COUNT else UNIT_QUIZ_COUNT
             val questions = withContext(Dispatchers.IO) {
-                if (unit < 0) repo.buildStageQuiz(count = STAGE_QUIZ_COUNT) else repo.buildQuiz(unit, UNIT_QUIZ_COUNT)
+                if (unit < 0) repo.buildStageQuiz(count = count, seed = seed)
+                else repo.buildQuiz(unit, count, seed = seed)
             }
             if (questions.isEmpty()) {
                 notify(if (unit < 0) "全词挑战暂不可用" else "该单元单词不足，换一个单元试试")
                 return@launch
             }
-            openQuiz(challengeStage, unit, questions)
+            openQuiz(
+                challengeStage, unit, questions,
+                QuizSpec(if (unit < 0) QUIZ_SPEC_STAGE else QUIZ_SPEC_UNIT, challengeStage, unit, count, seed)
+            )
+        }
+    }
+
+    /**
+     * 开一局错题重做（入口在排行榜）。
+     *
+     * 可以无限次开：本局不写 quiz_record、不评成就，所以刷多少遍都动不了排行榜，
+     * 唯一的副作用是答对就把题移出错题集。
+     * 题目清单在开局瞬间冻结进 spec.refs，进程被杀后能原样重放（见 [saveQuizSnapshot]）。
+     */
+    fun startWrongRedo(onReady: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val challengeStage = repo.stage
+            val seed = System.nanoTime()
+            val outcome = withContext(Dispatchers.IO) {
+                val refs = repo.wrongRedoRefs()
+                refs to repo.buildWrongRedoQuiz(refs, seed)
+            }
+            val (refs, questions) = outcome
+            if (questions.isEmpty()) {
+                notify("没有需要重做的错题")
+                onReady(false)
+                return@launch
+            }
+            openQuiz(
+                challengeStage, QUIZ_SCOPE_WRONG, questions,
+                QuizSpec(QUIZ_SPEC_WRONG, challengeStage, QUIZ_SCOPE_WRONG, questions.size, seed, refs),
+                onReady
+            )
         }
     }
 
@@ -836,13 +1085,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun startConfusableQuiz(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val challengeStage = repo.stage
-            val questions = withContext(Dispatchers.IO) { repo.buildConfusableQuiz(UNIT_QUIZ_COUNT) }
+            val seed = System.nanoTime()
+            val questions = withContext(Dispatchers.IO) { repo.buildConfusableQuiz(UNIT_QUIZ_COUNT, seed) }
             if (questions.isEmpty()) {
                 notify("易混词辨析暂不可用")
                 onReady(false)
                 return@launch
             }
-            openQuiz(challengeStage, QUIZ_SCOPE_CONFUSABLE, questions, onReady)
+            openQuiz(
+                challengeStage, QUIZ_SCOPE_CONFUSABLE, questions,
+                QuizSpec(QUIZ_SPEC_CONFUSABLE, challengeStage, QUIZ_SCOPE_CONFUSABLE, UNIT_QUIZ_COUNT, seed),
+                onReady
+            )
         }
     }
 
@@ -853,13 +1107,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun startTranslationQuiz(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val challengeStage = repo.stage
-            val questions = withContext(Dispatchers.IO) { repo.buildTranslationQuiz(UNIT_QUIZ_COUNT) }
+            val seed = System.nanoTime()
+            val questions = withContext(Dispatchers.IO) { repo.buildTranslationQuiz(UNIT_QUIZ_COUNT, seed) }
             if (questions.isEmpty()) {
                 notify("真题句子翻译题库暂不可用")
                 onReady(false)
                 return@launch
             }
-            openQuiz(challengeStage, QUIZ_SCOPE_TRANSLATION, questions, onReady)
+            openQuiz(
+                challengeStage, QUIZ_SCOPE_TRANSLATION, questions,
+                QuizSpec(QUIZ_SPEC_TRANSLATION, challengeStage, QUIZ_SCOPE_TRANSLATION, UNIT_QUIZ_COUNT, seed),
+                onReady
+            )
         }
     }
 
@@ -867,17 +1126,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun startLetterQuiz(letter: Char) {
         // 非 A–Z 的字符算不出合法的范围值，直接拒绝而不是让它和单元号碰撞
         val scope = quizScopeOfLetter(letter) ?: run {
-            notify("「$letter」不是有效的首字母")
+            notify("「${letter}」不是有效的首字母")
             return
         }
         viewModelScope.launch {
             val challengeStage = repo.stage
-            val questions = withContext(Dispatchers.IO) { repo.buildLetterQuiz(letter, UNIT_QUIZ_COUNT) }
+            val seed = System.nanoTime()
+            val questions = withContext(Dispatchers.IO) { repo.buildLetterQuiz(letter, UNIT_QUIZ_COUNT, seed = seed) }
             if (questions.isEmpty()) {
                 notify("「${letter.uppercaseChar()}」开头的单词不足，换一个字母试试")
                 return@launch
             }
-            openQuiz(challengeStage, scope, questions)
+            openQuiz(
+                challengeStage, scope, questions,
+                QuizSpec(QUIZ_SPEC_LETTER, challengeStage, scope, UNIT_QUIZ_COUNT, seed)
+            )
         }
     }
 
@@ -940,12 +1203,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applyAnswer(correct: Boolean, selected: Int) {
+        var applied = false
+        val question = _quiz.value.current
+        val challengeStage = _quiz.value.stage
         _quiz.update { s ->
             if (s.revealed) return@update s
+            /*
+             * 最后一题的「揭晓 → 入库」窗口内也必须挡住作答。
+             * nextQuestion 为了抢占这次推进，会把 revealed 置回 false，
+             * 而 finished 要等 saveQuizRecord 的 IO 跑完才置位；这段窗口里
+             * index 仍停在末题、active 仍为 true，末题因此变成「可以再答一次」：
+             * 连点选项会二次加分、二次加连击，结算页显示的分数与入库记录不一致。
+             */
+            if (finishing) return@update s
             val gain = if (correct) {
                 val base = baseScoreOf(s.current)
                 base + minOf(s.combo, 5) * 2
             } else 0
+            applied = true
             s.copy(
                 selected = selected,
                 revealed = true,
@@ -954,6 +1229,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 combo = if (correct) s.combo + 1 else 0,
                 maxCombo = if (correct) maxOf(s.maxCombo, s.combo + 1) else s.maxCombo
             )
+        }
+        // 错题集与音效只在「这次作答真的把题揭晓了」之后做一次。
+        // 放在 update 里不行：update 的 lambda 在并发更新下会重试，副作用会被执行多次；
+        // 放在 update 外又不加判断的话，连点两下会记两次错、响两声。
+        // 三个调用点都在主线程，applied 只会被真正提交的那一次置真。
+        if (!applied || question == null) return
+        sfx.play(correct)
+        viewModelScope.launch(Dispatchers.IO) {
+            repo.onQuizAnswered(challengeStage, question.word, question.kind, correct)
         }
     }
 
@@ -1001,6 +1285,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     elapsedMs = it.elapsedMs + spent
                 )
             }
+            // 快照必须在 index 推进**之后**再落，否则记下的永远是「上一题」：
+            // 实测答完 3 题、界面停在第 4 题时杀进程，恢复条却写「答到第 3 题」，
+            // 点继续回到第 3 题重答一遍 —— 比不恢复更容易让人以为成绩丢了。
+            saveQuizSnapshot()
         }
     }
 
@@ -1011,6 +1299,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         finishing = true
 
         val state = _quiz.value
+        val session = quizSession
         val duration = state.elapsedMs
         val accuracy = if (state.questions.isEmpty()) 0
         else state.correctCount * 100 / state.questions.size
@@ -1021,32 +1310,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             else -> 0
         }
         finishJob = viewModelScope.launch {
+            val isRedo = state.isRedo
             val gained = withContext(Dispatchers.IO) {
-                val record = repo.saveQuizRecord(
-                    // 用开局时记下的级别，而不是 repo.stage 实时值：
-                    // 答题中途切去别的标签改级别，会让入库级别与题目实际级别不一致
-                    stage = state.stage,
-                    unit = state.unit,
-                    mode = "mix",
-                    score = state.score,
-                    total = state.questions.size,
-                    correct = state.correctCount,
-                    maxCombo = state.maxCombo,
-                    durationMs = duration
-                )
-                repo.evaluateAchievements(record) to record
+                if (isRedo) {
+                    /*
+                     * 重做局既不写成绩也不评成就。
+                     * 错题可以无限次重做，一旦入库，把同一批题刷到全对就能在排行榜上
+                     * 挂出一个从未真实达到过的满分，「历次成绩」这个口径就被自己毁掉了；
+                     * 成就里还有「单次闯关连对 50 题」这类按局计数的档位，同样会被刷出来。
+                     */
+                    emptyList<AchievementDef>() to null
+                } else {
+                    val record = repo.saveQuizRecord(
+                        // 用开局时记下的级别，而不是 repo.stage 实时值：
+                        // 答题中途切去别的标签改级别，会让入库级别与题目实际级别不一致
+                        stage = state.stage,
+                        unit = state.unit,
+                        mode = "mix",
+                        score = state.score,
+                        total = state.questions.size,
+                        correct = state.correctCount,
+                        maxCombo = state.maxCombo,
+                        durationMs = duration
+                    )
+                    repo.evaluateAchievements(record) to record
+                }
+            }
+            // 重做结算要报「错题集还剩几道」，必须等答对的题移出之后再去数
+            val remaining = if (isRedo) {
+                withContext(Dispatchers.IO) { repo.quizWrongCount(state.stage) }
+            } else {
+                -1
             }
             // 只在本次闯关仍然有效时写入结算态：用户若已点退出，
-            // 状态会被重置为 QuizUiState()，此时再置 finished 就会弹出「幽灵结算页」
+            // 状态会被重置为 QuizUiState()，此时再置 finished 就会弹出「幽灵结算页」。
+            // 会话号比对补上另一半：退出后**又开了一局**时 active/finished 都是新局的值，
+            // 单看标志位拦不住，必须确认回写的仍是开局那一局。
+            if (session != quizSession) return@launch
             _quiz.update { s ->
                 if (!s.active || s.finished) s
                 else s.copy(
                     finished = true,
                     stars = stars,
                     lastRecord = gained.second,
-                    newAchievements = gained.first
+                    newAchievements = gained.first,
+                    remainingWrong = remaining
                 )
             }
+            clearQuizSnapshot()
             refreshHome()
             refreshProfile()
         }
@@ -1056,6 +1367,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         finishJob?.cancel()
         finishing = false
         questionStartTs = 0L
+        clearQuizSnapshot()
         _quiz.value = QuizUiState()
         refreshHome()
         refreshProfile()
@@ -1111,7 +1423,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun fileErrorMessage(action: String, error: Throwable): String {
         val raw = error.message?.trim().orEmpty()
         return if (error is IllegalArgumentException && raw.isNotEmpty()) raw
-        else "$action，请检查本机存储空间是否充足、文件是否可读，然后重试。" +
+        else "${action}，请检查本机存储空间是否充足、文件是否可读，然后重试。" +
             "\n（技术信息：${raw.ifBlank { error.javaClass.simpleName }}）"
     }
 
@@ -1169,7 +1481,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         notify(
                             buildString {
                                 append("已从「${file.name}」恢复学习数据")
-                                if (report.skipped > 0) append("，跳过 ${report.skipped} 条失效记录")
+                                if (report.skipped > 0) append("，跳过${report.skipped}条失效记录")
                             }
                         )
                     }
@@ -1198,11 +1510,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     iconStyle = repo.iconStyle,
                     themeMode = repo.themeMode,
                     animationsEnabled = repo.animationsEnabled,
+                    soundEnabled = repo.soundEnabled,
                     leaderboard = repo.userDb.quizRecords(50),
+                    wrongRedoCount = repo.userDb.quizWrongCount(repo.stage),
                     aggregate = repo.userDb.quizAggregate()
                 )
             }
-            _profile.value = data
+            /*
+             * 设置项必须以「当前值」为准合并，不能整体覆盖。
+             * data 是在 IO 线程上按那一刻的 repo 快照拼出来的；用户如果在这一趟读表
+             * 期间拨动了开关（setThemeMode / setAutoSpeak 等会立刻 _profile.update），
+             * 直接 `_profile.value = data` 就会把刚改的开关按回旧值 ——
+             * 表现为「进「我的」页顺手切深色，界面闪一下又变回浅色」。
+             * 首次加载（loading=true）时当前值还是默认值，必须整体采用 data，
+             * 否则会把默认的级别 / 目标一路带进会话里。
+             */
+            _profile.update { old ->
+                if (old.loading) data
+                else data.copy(
+                    goal = old.goal,
+                    autoSpeak = old.autoSpeak,
+                    speechRate = old.speechRate,
+                    stage = old.stage,
+                    iconStyle = old.iconStyle,
+                    themeMode = old.themeMode,
+                    animationsEnabled = old.animationsEnabled,
+                    soundEnabled = old.soundEnabled
+                )
+            }
         }
     }
 
@@ -1213,14 +1548,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         leaderboardJob?.cancel()
         leaderboardJob = viewModelScope.launch {
             val data = withContext(Dispatchers.IO) {
-                repo.userDb.quizRecords(50) to repo.userDb.quizAggregate()
+                Triple(
+                    repo.userDb.quizRecords(50),
+                    repo.userDb.quizAggregate(),
+                    repo.userDb.quizWrongCount(repo.stage)
+                )
             }
-            _profile.update { it.copy(leaderboard = data.first, aggregate = data.second) }
+            _profile.update {
+                it.copy(leaderboard = data.first, aggregate = data.second, wrongRedoCount = data.third)
+            }
         }
     }
 
     companion object {
         /** 搜索防抖时长：太短会在输入长词时频繁查库，太长会让结果显得迟钝 */
         private const val SEARCH_DEBOUNCE_MS = 250L
+
+        /** 闯关快照的有效期：超过就当作「用户已经不记得这一局了」 */
+        private const val RESTORE_WINDOW_MS = 30 * 60 * 1000L
     }
 }

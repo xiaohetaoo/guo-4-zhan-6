@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -32,6 +34,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -81,6 +84,28 @@ fun LearnScreen(
     var tab by rememberSaveable { mutableStateOf(0) }
     var showingAllWords by rememberSaveable { mutableStateOf(false) }
 
+    /*
+     * 级别一变就退出「全部单词」浏览态。
+     *
+     * showingAllWords 是 saveable 的，而跨级别刷新时 ViewModel 会刻意把
+     * allWords 清空（留着四级的词表显示在六级页面上是数据错误）。两者一叠加：
+     * 在词库页进了「预览全部」→ 回首页切到另一级别 → 再进词库页，
+     * 看到的就是「全部 0 个单词」+ 空列表 + 空字母条，而唯一的入口卡片
+     * 又被 AnimatedVisibility(!showingAllWords) 藏了起来 —— 用户只能退到首页重来。
+     *
+     * 必须只在「真的换了级别」时重置：LaunchedEffect 在首次组合也会跑一次，
+     * 无条件重置会让进程被回收后重建时刚恢复出来的 tab / 浏览态又被抹掉，
+     * 等于用一个体验问题换另一个。
+     */
+    var lastStage by rememberSaveable { mutableStateOf(state.stage) }
+    LaunchedEffect(state.stage) {
+        if (lastStage != state.stage) {
+            lastStage = state.stage
+            showingAllWords = false
+            tab = 0
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         // ---------- 顶部：阶段 + 搜索 ----------
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -95,8 +120,8 @@ fun LearnScreen(
                     Text(
                         // 不再写死「每单元 50 词」：末单元只装得下余数（实测四级末单元 48 词），
                         // 写死会与下面的单元列表对不上。改为直接报真实单元数。
-                        text = "共 ${state.totalWords} 词 · 已学 ${state.learnedWords} 词 · " +
-                            "${state.units.size} 个单元",
+                        text = "共${state.totalWords}词、已学${state.learnedWords}词、" +
+                            "${state.units.size}个单元",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -128,7 +153,7 @@ fun LearnScreen(
                                 )
                                 Spacer(Modifier.height(3.dp))
                                 Text(
-                                    text = "像好友列表一样按字母快速浏览 ${state.totalWords} 个单词",
+                                    text = "像好友列表一样按字母快速浏览${state.totalWords}个单词",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -188,8 +213,8 @@ fun LearnScreen(
                     item(key = "search_count") {
                         Text(
                             text = if (state.searchTruncated)
-                                "匹配较多，按字母序显示前 ${WordDb.SEARCH_LIMIT} 个单词 · 输入更完整的拼写可缩小范围"
-                            else "匹配 ${state.searchResult.size} 个单词",
+                                "匹配较多，按字母序显示前${WordDb.SEARCH_LIMIT}个单词，输入更完整的拼写可缩小范围"
+                            else "匹配${state.searchResult.size}个单词",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
@@ -230,7 +255,7 @@ fun LearnScreen(
                 }
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    text = "全部 ${state.allWords.size} 个单词",
+                    text = "全部${state.allWords.size}个单词",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -319,7 +344,7 @@ fun LearnScreen(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(3.dp)
         ) {
-            listOf("单元", "生词本 ${state.favWords.size}", "错词本 ${state.wrongWords.size}")
+            listOf("单元", "生词本${state.favWords.size}", "错词本${state.wrongWords.size}")
                 .forEachIndexed { i, label ->
                     val selected = tab == i
                     Box(
@@ -411,7 +436,7 @@ private fun UnitList(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "第 ${u.unit} 单元",
+                                text = "第${u.unit}单元",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -444,7 +469,7 @@ private fun UnitList(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "${u.learned} / ${u.total} 词",
+                            text = "${u.learned}/${u.total}词",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -507,7 +532,7 @@ private fun WordListOrEmpty(
                 AppCard(color = LocalAppColors.current.cardRose, padding = 14.dp) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "共 ${words.size} 个单词",
+                            text = "共${words.size}个单词",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f)
                         )
@@ -589,11 +614,18 @@ private fun LetterIndexBar(
     onPick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    /*
+     * 26 个字母 × 16dp 加内边距约 426dp：在小屏上放得下，一旦用户开了系统字体放大
+     * （1.3 倍时行高跟着涨）或设备本身只有 5 寸，底部几个字母会被父容器直接裁掉 ——
+     * 被裁掉的字母既看不见也点不到，等于 Z 开头的词无法快速跳转。
+     * 这里给条本身一个可滚容器：装得下时表现与原来完全一致，装不下时才能滚。
+     */
     Column(
         modifier = modifier
             .padding(end = 3.dp)
             .clip(RoundedCornerShape(13.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f))
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 2.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -601,7 +633,7 @@ private fun LetterIndexBar(
             val active = letter == current
             Box(
                 modifier = Modifier
-                    .size(width = 18.dp, height = 16.dp)
+                    .size(width = 22.dp, height = 18.dp)
                     .clip(RoundedCornerShape(7.dp))
                     .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
                     .clickable { onPick(letter) },

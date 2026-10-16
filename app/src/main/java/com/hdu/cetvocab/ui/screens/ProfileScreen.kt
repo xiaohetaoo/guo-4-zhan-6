@@ -91,7 +91,7 @@ fun ProfileScreen(
                     )
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        text = "当前阶段：${WordDb.stageLabel(state.stage)} · 每日目标 ${state.goal} 词",
+                        text = "当前阶段：${WordDb.stageLabel(state.stage)}、每日目标${state.goal}词",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -136,7 +136,7 @@ fun ProfileScreen(
                             // maxLines = 1：过去被 TierBadge 挤到宽度不足时，
                             // 长标题会在此换行，让「连续打卡 X 天」碎成两行。
                             Text(
-                                text = "连续打卡 ${ov.streakDays} 天",
+                                text = "连续打卡${ov.streakDays}天",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
@@ -152,8 +152,8 @@ fun ProfileScreen(
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "历史最长连续 ${ov.bestStreak} 天 · " +
-                                "累计学习 ${ov.totalMinutes} 分钟",
+                            text = "历史最长连续${ov.bestStreak}天· " +
+                                "累计学习${ov.totalMinutes}分钟",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2
@@ -166,11 +166,11 @@ fun ProfileScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Tag(text = "已学 ${ov.totalLearned} 词")
+                            Tag(text = "已学${ov.totalLearned}词")
                             // 统计口径写「熟悉以上」：这一档按 level >= 3（熟悉）起算，
                             // 而 levelLabel 的第 4 档才叫「掌握」，写「掌握 N 词」会和等级标签打架。
                             Tag(
-                                text = "熟悉以上 ${ov.mastered} 词",
+                                text = "熟悉以上${ov.mastered}词",
                                 container = LocalAppColors.current.cardMint,
                                 contentColor = LocalAppColors.current.success
                             )
@@ -189,7 +189,7 @@ fun ProfileScreen(
         item {
             AppCard {
                 SectionTitle(
-                    text = "成就（$unlockedCount / ${Achievements.ALL.size}）",
+                    text = "成就（${unlockedCount}/${Achievements.ALL.size}）",
                     accent = LocalAppColors.current.gold,
                     trailing = {
                         Row(
@@ -380,6 +380,9 @@ private fun GearIcon(modifier: Modifier = Modifier, color: Color) {
 private fun TierCard(learnedWords: Int) {
     val tier = Tier.of(learnedWords)
     val color = tierColor(tier)
+    // 文字色与装饰色分开：卡片底是段位色 10% 透明度，直接用同一个色值当文字色，
+    // 浅色主题下实测只有 2.0:1（黄金）到 2.7:1（王者），连大字号的 3:1 都不到。
+    val fg = tierTextColor(tier, LocalAppColors.current.isDark)
     val next = tier.next
     val progress = tier.progressToNext(learnedWords)
     AppCard(color = color.copy(alpha = 0.10f), padding = 18.dp) {
@@ -389,12 +392,12 @@ private fun TierCard(learnedWords: Int) {
                     text = tier.label,
                     fontSize = 30.sp,
                     fontWeight = FontWeight.Bold,
-                    color = color,
+                    color = fg,
                     maxLines = 1
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "已学 $learnedWords 词",
+                    text = "已学${learnedWords}词",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -406,16 +409,16 @@ private fun TierCard(learnedWords: Int) {
             ) {
                 if (next != null) {
                     Text(
-                        text = "距 ${next.label}",
+                        text = "距${next.label}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = "还差 ${tier.wordsToNext(learnedWords)} 词",
+                        text = "还差${tier.wordsToNext(learnedWords)}词",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = color
+                        color = fg
                     )
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(
@@ -432,7 +435,7 @@ private fun TierCard(learnedWords: Int) {
                         text = "已达最高段位",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = color
+                        color = fg
                     )
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(
@@ -448,6 +451,24 @@ private fun TierCard(learnedWords: Int) {
             }
         }
     }
+}
+
+/**
+ * 段位文字色：青铜 / 白银 / 黄金 / 钻石 / 王者。
+ *
+ * 与 [tierColor] 分开是必须的。卡片底是段位色 10% 透明度叠在页面底色上，
+ * 浅色主题下实测原色当文字用的对比度是黄金 2.01:1、钻石 2.23:1、
+ * 白银 2.51:1、王者 2.72:1 —— 30sp 大字要求 3:1，12sp 的「还差 N 词」要求 4.5:1，
+ * 五个段位有四个连大字线都不过。这里按主题各给一组压暗 / 提亮后的值，
+ * 实测深浅两套都在自己的卡片底上达到 4.5:1 以上；进度条仍用 [tierColor] 的原色，
+ * 它不是文字，只需要与轨道色可辨。
+ */
+private fun tierTextColor(tier: Tier, dark: Boolean): Color = when (tier) {
+    Tier.BRONZE -> if (dark) Color(0xFFD89B72) else Color(0xFF8A5620)
+    Tier.SILVER -> if (dark) Color(0xFFC9D3DD) else Color(0xFF5C6773)
+    Tier.GOLD -> if (dark) Color(0xFFE8C15A) else Color(0xFF7A5C00)
+    Tier.DIAMOND -> if (dark) Color(0xFF6FC6F5) else Color(0xFF155F91)
+    Tier.KING -> if (dark) Color(0xFFF09060) else Color(0xFFA8471F)
 }
 
 /** 段位配色（青铜→王者依次递进） */

@@ -77,10 +77,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 回到前台：恢复学习时长与闯关用时的计时 */
-    override fun onStart() {
-        super.onStart()
+    /**
+     * 可见且可交互 = 开始计时。
+     *
+     * 用 onResume/onPause 而不是 onStart/onStop：下拉通知栏、系统权限弹窗、
+     * TTS 语音包准备弹窗这些都只让 Activity 走到 onPause（它们不是全屏 Activity，
+     * 不会触发 onStop）。挂在 onStart/onStop 上时，用户停着不动的这几十秒
+     * 会被 flushStudyTimer 漏掉、pauseQuizTimer 也不会触发，
+     * 直接虚高「累计学习时长」和「本关用时」—— 后者是要进排行榜的。
+     */
+    override fun onResume() {
+        super.onResume()
         vm.onAppForeground()
+    }
+
+    /** 失去焦点即停表，口径与 [onResume] 对称 */
+    override fun onPause() {
+        super.onPause()
+        vm.onAppBackground()
     }
 
     /**
@@ -91,12 +105,10 @@ class MainActivity : ComponentActivity() {
      * 用户看到的是「回到桌面 → 图标已经是新的」，切换过程完全无感。
      *
      * [LauncherIcons.apply] 自带幂等判断，状态已经正确时不会产生任何写入。
-     * 这里同时承担「退到后台即停表」——否则用户切出去几分钟再回来，
-     * 这段时间会被算进累计学习时长与本关用时。
+     * 计时已上移到 [onPause]，这里只负责图标落地。
      */
     override fun onStop() {
         super.onStop()
-        vm.onAppBackground()
         val app = application as CetVocabApp
         // 放到后台线程执行：写组件状态是跨进程调用，不宜占用主线程。
         //

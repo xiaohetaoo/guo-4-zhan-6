@@ -61,6 +61,32 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         )
         db.execSQL("CREATE TABLE achievement(code TEXT PRIMARY KEY, unlocked_ts INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE app_meta(k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+        createQuizWrong(db)
+    }
+
+    /**
+     * 闯关错题集。
+     *
+     * 与 word_state.wrong_count（学习卡片「答错」计数，喂给错词本）是两套东西，互不合并：
+     * 卡片答错说明这个词没记住，闯关答错说明「这道题」没做对，
+     * 用户要的是「把闯关错的题再练一遍」，而不是把闯关变成第二本错词本。
+     *
+     * 主键取 (stage, kind, word_id)：同一个词在四级错选义、在六级错拼写，
+     * 是三条独立的待订正记录；只按 word_id 建键会让后一次答错覆盖前一次，
+     * 重做时就只补得回一种题型。
+     */
+    private fun createQuizWrong(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS quiz_wrong(" +
+                "stage INTEGER NOT NULL," +
+                "kind INTEGER NOT NULL," +
+                "word_id INTEGER NOT NULL," +
+                "wrong_count INTEGER NOT NULL DEFAULT 1," +
+                "last_ts INTEGER NOT NULL DEFAULT 0," +
+                "PRIMARY KEY(stage, kind, word_id))"
+        )
+        // 重做队列按「错得多 → 错得早」排序，这两个索引让排序走索引而不是全表排序
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_wrong_stage ON quiz_wrong(stage, wrong_count, last_ts)")
     }
 
     /**
@@ -68,8 +94,9 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
      *
      * 注意：这里**绝不能**出现「版本跨度不认识就 DROP 全部表」的兜底分支。
      * 历史实现写的是 `if (oldVersion < 2) { 迁移 } else { DROP 五张表; onCreate() }`，
-     * 当前 DB_VERSION=2 所以那段永远不会执行，但只要将来把版本提到 3，
+     * 当时 DB_VERSION=2，所以那段永远不会执行，但只要把版本提到 3，
      * `oldVersion == 2` 就会落进 else —— 用户全部学习进度、成绩、成就会被静默清空。
+     * 现在 DB_VERSION=3，那条 else 已经是「会执行」的状态，绝对不能写回来。
      *
      * 因此改成「一档一档往下走」的形式：新增版本时只在末尾续写一个 if，旧数据始终保留。
      * 判断统一用 `oldVersion < N`（而不是维护一个中间变量），
@@ -83,8 +110,13 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
             db.execSQL("ALTER TABLE word_state ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 0")
         }
 
+        if (oldVersion < 3) {
+            // v2 -> v3：新增闯关错题集表。纯增表，不动任何既有行。
+            createQuizWrong(db)
+        }
+
         // 后续版本在此续写，例如：
-        // if (oldVersion < 3) { db.execSQL("ALTER TABLE ...") }
+        // if (oldVersion < 4) { db.execSQL("ALTER TABLE ...") }
         // 迁移一律用 ALTER / UPDATE 增量完成，不做破坏性重建。
     }
 
@@ -261,6 +293,111 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         return writableDatabase.insert("quiz_record", null, cv)
     }
 
+    // ---------- 闯关错题集 ----------
+
+    /**
+     * 记一道闯关错题（已存在则错误次数 +1）。
+     *
+     * 用「insertWithOnConflict(IGNORE) 的返回值判断有没有真插进去」，
+     * 而不是先 SELECT 再决定 INSERT/UPDATE：那是一次往返而不是两次，
+     * 也不会重演 markLearned 修过的那类读改写竞态。
+     * IGNORE 命中冲突时返回 -1，据此再走 UPDATE 累加，两条路径互斥、不会重复计数。
+     */
+    fun addQuizWrong(stage: Int, kind: Int, wordId: Int) {
+        val db = writableDatabase
+        val now = System.currentTimeMillis()
+        db.beginTransaction()
+        try {
+            val cv = ContentValues().apply {
+                put("stage", stage)
+                put("kind", kind)
+                put("word_id", wordId)
+                put("wrong_count", 1)
+                put("last_ts", now)
+            }
+            val rowId = db.insertWithOnConflict(
+                "quiz_wrong", null, cv, SQLiteDatabase.CONFLICT_IGNORE
+            )
+            if (rowId < 0) {
+                db.execSQL(
+                    "UPDATE quiz_wrong SET wrong_count=wrong_count+1, last_ts=? " +
+                        "WHERE stage=? AND kind=? AND word_id=?",
+                    arrayOf(now, stage, kind, wordId)
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** 答对即移出：错题集始终等于「最近一次作答仍是错的题」，不做已订正标记。 */
+    fun takeQuizWrong(stage: Int, kind: Int, wordId: Int) {
+        writableDatabase.execSQL(
+            "DELETE FROM quiz_wrong WHERE stage=? AND kind=? AND word_id=?",
+            arrayOf(stage, kind, wordId)
+        )
+    }
+
+    /** 当前级别的待重做错题数，供排行榜汇总卡显示。 */
+    fun quizWrongCount(stage: Int): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM quiz_wrong WHERE stage=?", arrayOf(stage.toString())
+        ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    /**
+     * 重做队列取题：错得多的优先，同样多的先错的优先。
+     * 排序键写死在 SQL 里，与 idx_wrong_stage 的顺序一致，避免全表排序。
+     */
+    fun quizWrongEntries(stage: Int, limit: Int): List<QuizWrong> {
+        val list = ArrayList<QuizWrong>()
+        readableDatabase.rawQuery(
+            "SELECT stage,kind,word_id,wrong_count,last_ts FROM quiz_wrong " +
+                "WHERE stage=? ORDER BY wrong_count DESC, last_ts ASC LIMIT $limit",
+            arrayOf(stage.toString())
+        ).use { c ->
+            while (c.moveToNext()) {
+                list.add(QuizWrong(c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getLong(4)))
+            }
+        }
+        return list
+    }
+
+    fun allQuizWrong(): List<QuizWrong> {
+        val list = ArrayList<QuizWrong>()
+        readableDatabase.rawQuery(
+            "SELECT stage,kind,word_id,wrong_count,last_ts FROM quiz_wrong " +
+                "ORDER BY stage,kind,word_id", null
+        ).use { c ->
+            while (c.moveToNext()) {
+                list.add(QuizWrong(c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getLong(4)))
+            }
+        }
+        return list
+    }
+
+    /** 备份恢复用：整表替换（先清后插），与其余各段的「清空再写回」口径一致。 */
+    fun replaceQuizWrong(rows: List<QuizWrong>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL("DELETE FROM quiz_wrong")
+            for (r in rows) {
+                db.execSQL(
+                    "INSERT OR REPLACE INTO quiz_wrong(stage,kind,word_id,wrong_count,last_ts) VALUES(?,?,?,?,?)",
+                    arrayOf(r.stage, r.kind, r.wordId, r.wrongCount, r.lastTs)
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun clearQuizWrong() {
+        writableDatabase.execSQL("DELETE FROM quiz_wrong")
+    }
+
     fun quizRecords(limit: Int = 100): List<QuizRecord> {
         val list = ArrayList<QuizRecord>()
         readableDatabase.rawQuery(
@@ -312,6 +449,20 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         }
 
     /**
+     * 全部闯关次数，**不**排除辨析 / 翻译两类拓展练习。
+     *
+     * 排行榜与最高分用 [quizPlayedCount]（拓展练习不计入排名，是有意设计），
+     * 但成就不能用它：成就墙上「明辨秋毫 = 完成一次易混词辨析闯关」和
+     * 「初次闯关 = 完成第一次单词闯关」说的是同一件事，用两套口径就会出现
+     * 「已解锁明辨秋毫、却显示还没初次闯关」的自相矛盾。
+     * 凡是对用户表述为「累计闯关 N 次」的判定，一律走这个全量口径。
+     */
+    fun quizPlayedCountAll(): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM quiz_record", null).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+
+    /**
      * 排行榜页顶部三块统计（最高分 / 平均分 / 最高正确率 + 总次数），一次查询算完。
      *
      * 关键：在**全表**上聚合，而不是拿 `quizRecords(50)` 的结果现算 ——
@@ -319,12 +470,14 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
      * 出现「共 87 次闯关记录」却「平均分只按 50 条算」的自相矛盾。
      *
      * `IFNULL` 是为了让「一条记录都没有」时也返回一行 0，而不是 NULL。
-     * `correct*100/total` 在 SQLite 里是整数除法，与 [QuizRecord.accuracy] 口径一致。
+     * 正确率必须四舍五入（`ROUND(correct * 100.0 / total)`），与 [percentOf] 同一口径。
+     * 早先这里写的是整数除法，与 Kotlin 侧一致但两边一起错：
+     * 99.5% 在排行榜显示 99、在首页进度显示 100。
      */
     fun quizAggregate(): QuizAggregate =
         readableDatabase.rawQuery(
             "SELECT COUNT(*), IFNULL(MAX(score), 0), IFNULL(CAST(AVG(score) AS INTEGER), 0), " +
-                "IFNULL(MAX(CASE WHEN total > 0 THEN correct * 100 / total ELSE 0 END), 0) " +
+                "IFNULL(MAX(CASE WHEN total > 0 THEN CAST(ROUND(correct * 100.0 / total) AS INTEGER) ELSE 0 END), 0) " +
                 "FROM quiz_record WHERE $RANKED_ONLY", null
         ).use { c ->
             if (c.moveToFirst()) {
@@ -446,7 +599,7 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
 
     companion object {
         const val DB_NAME = "user_data.db"
-        const val DB_VERSION = 2
+        const val DB_VERSION = 3
 
         /** word_state 的全部列，顺序与 [toWordState] 的下标严格对应 */
         private const val STATE_COLUMNS =

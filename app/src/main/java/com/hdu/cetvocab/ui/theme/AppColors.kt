@@ -30,7 +30,15 @@ data class AppColors(
     val tierGold: Color,
     val badgeLockedTint: Color,
     val badgeLockedBg: Color,
-    val badgeLockedFg: Color
+    val badgeLockedFg: Color,
+    /**
+     * 当前是不是深色主题。
+     *
+     * 需要它是因为「同一套语义色在深浅两套底上要求相反」：段位色在浅色卡片上
+     * 必须压暗才够 4.5:1，在深色卡片上又必须提亮才够。只给一组色值，
+     * 另一套主题下必然有一头不达标。
+     */
+    val isDark: Boolean
 )
 
 /** 浅色实例：色值与原 [Color.kt] 中的常量一一对应，数值不变 */
@@ -51,7 +59,8 @@ val LightAppColors = AppColors(
     tierGold = ColorGold,
     badgeLockedTint = Color(0xFFCBBBB0),
     badgeLockedBg = Color(0xFFE9DED6),
-    badgeLockedFg = Color(0xFF9C8B80)
+    badgeLockedFg = Color(0xFF9C8B80),
+    isDark = false
 )
 
 /** 深色实例 */
@@ -72,7 +81,8 @@ val DarkAppColors = AppColors(
     tierGold = DarkTierGold,
     badgeLockedTint = Color(0xFF5A4E44),
     badgeLockedBg = DarkBadgeLockedBg,
-    badgeLockedFg = DarkBadgeLockedFg
+    badgeLockedFg = DarkBadgeLockedFg,
+    isDark = true
 )
 
 /** 语义色 CompositionLocal，默认浅色，避免预览/测试时为空 */

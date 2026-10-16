@@ -15,9 +15,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -267,6 +271,31 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             )
                         )
                     }
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "答题音效",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "闯关答对答错时各给一声提示音，答对明亮、答错低沉。" +
+                                    "音量跟随手机媒体音量，静音时不响。音效由应用实时合成，不占用安装包体积",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = state.soundEnabled,
+                            // 关掉立刻生效，不用等下一局：正在答题的人按下去就该听不见下一声
+                            onCheckedChange = { vm.setSoundEnabled(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                    }
                 }
             }
 
@@ -330,7 +359,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "读音由手机系统自带的 TTS 引擎合成，可离线使用，不消耗流量。",
+                        text = "读音由手机系统自带的TTS引擎合成，可离线使用，不消耗流量。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -361,7 +390,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             modifier = Modifier.weight(1f),
                             selected = state.iconStyle != LauncherIcons.STYLE_SIMPLE,
                             title = "默认图标",
-                            caption = "书本 + 火花",
+                            caption = "书本+火花",
                             onClick = { vm.setIconStyle(LauncherIcons.STYLE_DEFAULT) }
                         ) {
                             DefaultIconPreview()
@@ -409,8 +438,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     Spacer(Modifier.height(10.dp))
                     listOf(
                         "词库、例句、词根与联想记忆内容全部内置于安装包，打开即用",
-                        "安装包未申请 INTERNET 权限，系统层面无法联网",
-                        "发音调用系统 TTS 引擎，同样无需联网",
+                        "安装包未申请INTERNET权限，系统层面无法联网",
+                        "发音调用系统TTS引擎，同样无需联网",
                         "学习进度、成绩与成就仅保存在本机数据库，不上传任何服务器"
                     ).forEach {
                         BulletRow(
@@ -432,10 +461,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         // 不写「官方词表」这类无法核对的说法：
                         // ECDICT 的 cet4/cet6 是社区维护字段，四/六级词表还并了教材词表，
                         // 六级表包含全部四级词。联想记忆含大模型生成内容，必须主动披露。
-                        "四/六级词表：开源词典 ECDICT（MIT 许可）的 cet4 / cet6 标签，" +
-                            "并上开源词库 english-vocabulary 的教材词表后去重",
+                        "四/六级词表：开源词典ECDICT（MIT许可）的cet4/cet6标签，" +
+                            "并上开源词库english-vocabulary的教材词表后去重",
                         "六级词表包含全部四级词，两级的单词卡片各自独立成行",
-                        "中文释义、英美音标、例句：开源词库 english-vocabulary 与 ECDICT",
+                        "中文释义、英美音标、例句：开源词库english-vocabulary与ECDICT",
                         "词根词缀与形近词：由上述开源数据按词缀表自动构建",
                         "联想记忆：精选助记由大模型生成、人工校对后内置，" +
                             "其余由词根词缀与形近数据拼接，仅供记忆启发，不作为权威释义",
@@ -538,7 +567,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     InfoRow("网络权限", "未申请")
                     // 六级表是「cet6 标签 ∪ 四级表」，所以 6248 里含全部 4750 个四级词；
                     // 不写清楚容易被读成「两本共一万一千多个不同单词」。
-                    InfoRow("词库规模", "四级 4750 词 / 六级 6248 词（六级含全部四级词）")
+                    InfoRow("词库规模", "四级4750词/六级6248词（六级含全部四级词）")
                     InfoRow("开发环境", "Kotlin + Jetpack Compose")
                 }
             }
@@ -608,8 +637,14 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { restoreChoices = emptyList() },
             title = { Text(stringResource(R.string.restore_pick_title)) },
+            // 备份列表必须可滚：目录里攒十几个备份时，普通 Column 会把
+            // 超出弹窗高度的条目直接裁在屏幕外，用户既看不到也点不到。
             text = {
-                Column {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
                     restoreChoices.forEach { f ->
                         Text(
                             text = f.name,
@@ -881,9 +916,20 @@ private fun IconOption(
     }
 }
 
-/** 默认图标预览：品牌橙底 + 应用内绘制的书本前景。 */
+/**
+ * 预览框：56dp 圆角橙底，尺寸与桌面图标对齐。
+ *
+ * ⚠️ 前景必须按【启动器的裁法】画，不能整张 Fit：
+ * 自适应图标的 108dp 画布只有中央 72dp 会露出来，启动器把那 72dp 放大铺满图标。
+ * 若像 v1.4.2 之前那样把整张画布 Fit 进 48dp，预览里的字形只有桌面的 0.57 倍，
+ * 用户看到的就是「桌面和设置里不一样」（2026-10-15 反馈）。
+ * 做法：把前景按 56 * 108/72 = 84dp 居中铺出去，靠外层 clip 裁掉溢出，
+ * 露出来的正好是画布中央 72/108，与桌面逐像素同比例。
+ * ⚠️ 溢出必须用 requiredSize：Modifier.size(84.dp) 会被父框的 56dp 上限夹回去，
+ * 于是又变回整张画布 Fit，实测字形只有桌面的 0.65 倍（第一版就踩了这个坑）。
+ */
 @Composable
-private fun DefaultIconPreview() {
+private fun IconPreviewFrame(foreground: @Composable () -> Unit) {
     Box(
         modifier = Modifier
             .size(56.dp)
@@ -891,35 +937,39 @@ private fun DefaultIconPreview() {
             .background(Color(0xFFE2703A)),
         contentAlignment = Alignment.Center
     ) {
+        foreground()
+    }
+}
+
+/** 默认图标预览：品牌橙底 + 应用内绘制的书本前景（按启动器裁法放大到 84dp）。 */
+@Composable
+private fun DefaultIconPreview() {
+    IconPreviewFrame {
         Image(
             painter = painterResource(R.drawable.ic_launcher_foreground),
             contentDescription = null,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.size(48.dp)
+            modifier = Modifier.requiredSize(84.dp)
         )
     }
 }
 
 /**
  * 简洁图标预览：橙底白字，字形直接铺桌面图标同一个前景 PNG
- * （mipmap/ic_fg_si 或 ic_fg_liu），保证预览与桌面所见完全一致。
- * ⚠️ 别再退回 Text 画字：系统默认字体与桌面图标生成用的书法字体
- * （华文行楷）不是一回事，预览会和桌面「两张脸」（v1.3.0 的教训）。
+ * （mipmap/ic_fg_si 或 ic_fg_liu），并按 IconPreviewFrame 的裁法还原启动器遮罩，
+ * 保证预览与桌面所见完全一致。
+ * ⚠️ 别再退回 Text 画字：系统默认字体与桌面图标生成用的黑体不是一回事，
+ * 预览会和桌面「两张脸」（v1.3.0 的教训）。
+ * ⚠️ 也别改回 Modifier.size(48.dp)：那是整张 108 画布，等于偷偷缩小 1.76 倍。
  */
 @Composable
 private fun SimpleIconPreview(foregroundRes: Int) {
-    Box(
-        modifier = Modifier
-            .size(56.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFFE2703A)),
-        contentAlignment = Alignment.Center
-    ) {
+    IconPreviewFrame {
         Image(
             painter = painterResource(foregroundRes),
             contentDescription = null,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.size(48.dp)
+            modifier = Modifier.requiredSize(84.dp)
         )
     }
 }

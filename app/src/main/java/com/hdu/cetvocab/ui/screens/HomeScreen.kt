@@ -82,8 +82,15 @@ fun HomeScreen(
     // 这里用弹簧而不是固定时长缓动：切换级别是个可以被打断的操作
     // （用户可能在动画没走完时又点回四级），弹簧能自然接管而不是重新起播。
     val stageAnim = remember { Animatable(1f) }
-    val seenStage = remember { mutableIntStateOf(state.stage) }
+    // 初值刻意用 -1 而不是 state.stage：冷启动第一帧读到的往往是快照默认级别，
+    // 真正的级别要等 refreshHome 回来。若把首帧的值当作「已见过」，
+    // 六级用户每次冷启动都会多播一次整页淡入，与「首次进入不重放」的意图相反。
+    val seenStage = remember { mutableIntStateOf(-1) }
     LaunchedEffect(state.stage) {
+        if (seenStage.intValue < 0) {
+            seenStage.intValue = state.stage
+            return@LaunchedEffect
+        }
         if (state.stage != seenStage.intValue) {
             seenStage.intValue = state.stage
             stageAnim.snapTo(0f)
@@ -152,7 +159,7 @@ fun HomeScreen(
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "/ ${state.goal} 词",
+                                text = "/${state.goal}词",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -181,19 +188,19 @@ fun HomeScreen(
                         Text(
                             text = when {
                                 state.dueCount > 0 ->
-                                    "待复习 ${state.dueCount} 词 · 队列 ${state.queueCount} 词"
+                                    "待复习${state.dueCount}词、队列${state.queueCount}词"
                                 state.queueCount > 0 ->
-                                    "复习已还清 · 队列 ${state.queueCount} 词"
+                                    "复习已还清、队列${state.queueCount}词"
                                 progress >= 1f ->
-                                    "复习已还清 · 今日额度用满"
+                                    "复习已还清、今日额度用满"
                                 // 队列为空、目标也没达成时，要分清两种情况：
                                 // 本级真的全学完了（没有新词可补），还是每日目标被改成了
                                 // 非正数（`newWords(remain<=0)` 恒空，但词还在）。
                                 // 前者说「都已学过」，后者不能说「额度用满」也不能说学完。
                                 state.totalWords > 0 && state.stageLearned >= state.totalWords ->
-                                    "本级 ${state.totalWords} 词都已学过 · 可切换别的级别"
+                                    "本级${state.totalWords}词都已学过、可切换别的级别"
                                 else ->
-                                    "今天没有排到要学的词 · 可提前学下一组新词"
+                                    "今天没有排到要学的词、可提前学下一组新词"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -244,7 +251,7 @@ fun HomeScreen(
                             text = when {
                                 goalReached -> "想再学一批，可以提前学下一组新词"
                                 stageExhausted -> "本级没有可学的新词了，可切换另一个级别"
-                                else -> "每日目标为 0 时不会排新词，可在设置里调高目标"
+                                else -> "每日目标为0时不会排新词，可在设置里调高目标"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -321,7 +328,7 @@ fun HomeScreen(
         // ---------- 近 7 天 ----------
         item {
             AppCard {
-                SectionTitle(text = "近 7 天学习量")
+                SectionTitle(text = "近7天学习量")
                 Spacer(Modifier.height(14.dp))
                 WeekBarChart(stats = state.weekStats, goal = state.goal)
                 Spacer(Modifier.height(10.dp))
@@ -333,7 +340,7 @@ fun HomeScreen(
                             state.weekStats.size).roundToInt()
                     } 词")
                     Spacer(Modifier.width(8.dp))
-                    Tag(text = "最长连续 ${ov.bestStreak} 天")
+                    Tag(text = "最长连续${ov.bestStreak}天")
                 }
             }
         }

@@ -32,9 +32,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.data.QuizRecord
+import com.hdu.cetvocab.data.durationText
 import com.hdu.cetvocab.data.quizScopeLabel
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AppCard
+import com.hdu.cetvocab.ui.components.TopicCard
 import com.hdu.cetvocab.ui.components.AppTopBar
 import com.hdu.cetvocab.ui.components.EmptyHint
 import com.hdu.cetvocab.ui.components.SectionTitle
@@ -45,10 +47,11 @@ import java.time.format.DateTimeFormatter
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 
 @Composable
-fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit) {
+fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit, onStartRedo: () -> Unit) {
     val state by vm.profile.collectAsState()
     val list = state.leaderboard
     val agg = state.aggregate
+    val wrongCount = state.wrongRedoCount
 
     LaunchedEffect(Unit) { vm.refreshLeaderboard() }
 
@@ -58,12 +61,12 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit) {
             // 用真实总次数，而不是 list.size：
             // 数据源 quizRecords(50) 最多返回 50 条，超过 50 次后「共 N 次」就不准了。
             // 总数与上榜条数不一致时，把「只列前 50」标注出来，免得以为数据丢了。
-            subtitle = "共 ${agg.count} 次闯关记录 · 按得分从高到低" +
-                if (agg.count > list.size) "（榜单只显示前 ${list.size} 条）" else "",
+            subtitle = "共${agg.count}次闯关记录，按得分从高到低" +
+                if (agg.count > list.size) "（榜单只显示前${list.size}条）" else "",
             onBack = onBack
         )
 
-        if (list.isEmpty()) {
+        if (list.isEmpty() && wrongCount == 0) {
             EmptyHint("还没有闯关成绩", hint = "去「闯关」页完成一局，成绩会自动记录在这里")
             return
         }
@@ -79,6 +82,21 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit) {
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            item {
+                // 闯关错题重做入口。放在统计块之前：它是「这一页能做的事」，
+                // 而统计只是读数；有错题时先给用户动作，比先给他看分数有用。
+                if (wrongCount > 0) {
+                    TopicCard(
+                        title = "闯关错题重做",
+                        desc = "待重做${wrongCount}题，答对即移出错题集。可反复重做，" +
+                            "本局成绩不计入排行榜与成就",
+                        container = LocalAppColors.current.cardPeach,
+                        actionLabel = "开始重做",
+                        onClick = onStartRedo
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
+            }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     StatTile(
@@ -170,8 +188,8 @@ private fun RankRow(rank: Int, record: QuizRecord) {
             }
             Spacer(Modifier.height(3.dp))
             Text(
-                text = "正确 ${record.correct}/${record.total} · 正确率 ${record.accuracy}% · " +
-                    "连击 ${record.maxCombo} · ${formatTs(record.ts)}",
+                text = "正确${record.correct}/${record.total}、正确率${record.accuracy}%、" +
+                    "连击${record.maxCombo}、${formatTs(record.ts)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -184,7 +202,7 @@ private fun RankRow(rank: Int, record: QuizRecord) {
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = "${record.durationMs / 1000} 秒",
+                text = durationText(record.durationMs),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

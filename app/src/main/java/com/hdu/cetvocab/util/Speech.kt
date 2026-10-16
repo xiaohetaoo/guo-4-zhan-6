@@ -56,29 +56,61 @@ class Speech(
         if (configured) return
         val tts = engine ?: return
         runCatching {
-            tts.language = Locale.US
+            /*
+             * setLanguage 的返回值不能丢。旧代码 `tts.language = Locale.US` 直接把
+             * 返回值扔掉并无条件 configured = true，于是引擎里没有英文语音数据时
+             * （LANG_MISSING_DATA / LANG_NOT_SUPPORTED，国产 ROM 上并不罕见）
+             * 表现是：用中文音色硬读英文单词、且因为 configured 已置位而永不重试，
+             * 用户只会觉得「读得不准」，不知道要去装语音包。
+             * 这里记下缺失状态，交给界面提示一次；语速仍照常设置，
+             * 因为语速与语言是否可用无关。
+             */
+            val r = tts.setLanguage(Locale.US)
+            englishVoiceMissing = r == TextToSpeech.LANG_MISSING_DATA ||
+                r == TextToSpeech.LANG_NOT_SUPPORTED
             tts.setSpeechRate(rateProvider())
             tts.setPitch(1.0f)
             configured = true
         }
     }
 
+    /** 英文语音数据是否缺失（未初始化前为 false） */
+    @Volatile
+    var englishVoiceMissing: Boolean = false
+        private set
+
+    /**
+     * 发音不可用时的回调（引擎没装好、或英文语音数据缺失）。
+     * 由 AppViewModel 挂上，用来提示一次；不在此类里直接弹 Toast，
+     * 保持 Speech 不依赖界面层。
+     */
+    var onUnavailable: ((String) -> Unit)? = null
+
     /** 手动发音：用户主动点击喇叭，不受「自动朗读」开关影响 */
     fun speak(text: String) {
         if (text.isBlank()) return
         ensureConfigured()
         val tts = engine
-        if (!ready || tts == null) return
+        if (!ready || tts == null) {
+            // 点了没反应比「读得难听」更让人以为 App 坏了，必须给一句反馈
+            onUnavailable?.invoke("系统语音引擎未就绪，稍后再试一次")
+            return
+        }
         runCatching {
             // 语速可能在设置里被改过，每次发音前重新同步
             tts.setSpeechRate(rateProvider())
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "cet_" + text.hashCode())
+        }
+        if (englishVoiceMissing) {
+            onUnavailable?.invoke("系统未安装英文语音数据，发音可能不准；可在系统设置的语音输入里安装")
         }
     }
 
     /** 自动发音：翻卡 / 出题时触发，遵守「自动朗读」开关 */
     fun speakAuto(text: String) {
         if (!autoSpeakProvider()) return
+        // 自动发音不打扰：引擎缺失时静默跳过，避免每翻一张卡弹一次提示
+        if (!ready || englishVoiceMissing) return
         speak(text)
     }
 
@@ -90,5 +122,6 @@ class Speech(
         engine = null
         ready = false
         configured = false
+        englishVoiceMissing = false
     }
 }

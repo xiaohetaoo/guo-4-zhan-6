@@ -153,7 +153,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     // 「语速」与「自动朗读」两个开关以回调形式注入，Speech 内部每次发音都取最新值，
     // 因此用户改设置后无需重建实例即可生效。
     val speech = remember {
-        Speech(context, { vm.speechRate }, { vm.autoSpeak })
+        Speech(context, { vm.speechRate }, { vm.autoSpeak }).also { s ->
+            // 发音不可用时给一句提示，而不是静默不响
+            s.onUnavailable = { msg -> vm.toast(msg) }
+        }
     }
     DisposableEffect(Unit) {
         onDispose { speech.shutdown() }
@@ -460,7 +463,17 @@ private fun AppNavHost(
         }
 
         composable(Routes.LEADERBOARD) {
-            LeaderboardScreen(vm = vm, onBack = { nav.popBackStack() })
+            LeaderboardScreen(
+                vm = vm,
+                onBack = { nav.popBackStack() },
+                // 重做局已经在 ViewModel 里开好了，这里只需要把排行榜这一层弹掉，
+                // 下面的闯关标签页就会自己显示这一局（QuizScreen 按 state.active 渲染）。
+                // 不用 goTab：实测在压栈页里调 nav.navigate(标签路由) 不会切过去，
+                // 而 popBackStack 一步到位，也不依赖 popUpTo/restoreState 的组合行为。
+                onStartRedo = {
+                    vm.startWrongRedo { ok -> if (ok) nav.popBackStack() }
+                }
+            )
         }
 
         composable(Routes.SETTINGS) {
