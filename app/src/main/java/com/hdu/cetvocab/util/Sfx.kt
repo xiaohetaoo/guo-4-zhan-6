@@ -37,7 +37,18 @@ class Sfx(context: Context) {
     private val correctPcm: ShortArray by lazy { tone(listOf(880.0 to 0.07, 1318.0 to 0.12), harmonics = 1.0) }
     private val wrongPcm: ShortArray by lazy { tone(listOf(233.0 to 0.09, 175.0 to 0.13), harmonics = 0.42) }
 
-    /** 正在播的那条音轨。只在播放线程上读写，不需要锁。 */
+    /**
+     * 正在播的那条音轨。
+     *
+     * 只在播放线程上读写 —— 包括播放完成回调：`onMarkerReached` 是 AudioTrack
+     * 自己的通知线程送上来的，不在 [executor] 上，所以回调里只做一次「投回队列」，
+     * 真正的置空与 release 仍旧在播放线程执行。早先的写法是在回调里直接
+     * `pending = null`，于是这个字段被两个线程无同步地读写：
+     * 播放线程可能读到过期非空值而对已释放的轨再 release 一次，
+     * 反过来回调线程把正在播的轨提前置空后，一旦播放被打断（来电、抢焦点）
+     * marker 永远不会来，那条音轨就再没人 release —— 音轨数量有系统上限，
+     * 漏够十几条之后音效会静默失效。
+     */
     private var pending: AudioTrack? = null
 
     /**
@@ -50,12 +61,18 @@ class Sfx(context: Context) {
      * 0.42 会让音色发闷、略带沙感，用来表达「错了」比纯音更合适。
      */
     private fun tone(segments: List<Pair<Double, Double>>, harmonics: Double): ShortArray {
-        val total = (SAMPLE_RATE * segments.sumOf { it.second }).toInt()
+        // 每段各自取整再相加，而不是「总时长先乘再取整」：
+        // 后者与 Σtrunc(段长) 会差一个采样，末尾那个采样要么被
+        // coerceAtMost 复制一份、要么留成静音，虽然听不出来，
+        // 但缓冲区大小和实际写入量对不上这件事，正是 MODE_STATIC 最容易踩的地方。
+        val lens = segments.map { (SAMPLE_RATE * it.second).toInt() }
+        val total = lens.sum()
         val buf = ShortArray(total)
         val attack = (SAMPLE_RATE * 0.003).toInt().coerceAtLeast(1)
         var pos = 0
-        for ((freq, seconds) in segments) {
-            val len = (SAMPLE_RATE * seconds).toInt()
+        for ((si, pair) in segments.withIndex()) {
+            val freq = pair.first
+            val len = lens[si]
             for (i in 0 until len) {
                 val t = (pos + i) / SAMPLE_RATE.toDouble()
                 val global = (pos + i)
@@ -68,7 +85,7 @@ class Sfx(context: Context) {
                 val fadeOutFrom = total - attack
                 if (global > fadeOutFrom) env *= ((total - global).toDouble() / attack).coerceIn(0.0, 1.0)
                 val v = (sample * env * PEAK * Short.MAX_VALUE).toInt().coerceIn(-32768, 32767)
-                buf[(pos + i).coerceAtMost(total - 1)] = v.toShort()
+                buf[pos + i] = v.toShort()
             }
             pos += len
         }
@@ -121,8 +138,17 @@ class Sfx(context: Context) {
             track.setPlaybackPositionUpdateListener(
                 object : AudioTrack.OnPlaybackPositionUpdateListener {
                     override fun onMarkerReached(t: AudioTrack) {
-                        if (pending === t) pending = null
-                        runCatching { t.release() }
+                        // 回调在 AudioTrack 的通知线程上，这里只把它转交给播放线程，
+                        // 让 pending 的读写始终落在同一个线程（见字段注释）。
+                        // 队列已经关掉（应用退出）时就直接收尾，别让异常冒到音频线程上。
+                        if (executor.isShutdown) {
+                            runCatching { t.release() }
+                        } else {
+                            executor.execute {
+                                if (pending === t) pending = null
+                                runCatching { t.release() }
+                            }
+                        }
                     }
 
                     override fun onPeriodicNotification(t: AudioTrack) = Unit

@@ -53,13 +53,14 @@
     <string name="quiz_lexicon_not_ready">词库尚未就绪</string>
     <string name="quiz_topic_confusable">易混词辨析</string>
     <!-- 题数用 %1$d 占位，由调用方传 UNIT_QUIZ_COUNT：
-         写死「10 题」时改题数会漏改这一行，而闯关页的其它题数文案已经是常量插值了。 -->
-    <string name="quiz_topic_confusable_desc">给中文释义，从四个形近词中挑出正确单词 · %1$d 题</string>
+         写死「10 题」时改题数会漏改这一行，而闯关页的其它题数文案已经是常量插值了。
+         分隔一律用顿号：界面文案已统一去掉间隔号「·」，这三行是最后剩下的三处。 -->
+    <string name="quiz_topic_confusable_desc">给中文释义，从四个形近词中挑出正确单词、%1$d题</string>
     <string name="quiz_topic_translation">真题句子翻译</string>
-    <string name="quiz_topic_translation_desc">给出中文句子，选出全部正确译法，可多选 · %1$d 题</string>
+    <string name="quiz_topic_translation_desc">给出中文句子，选出全部正确译法，可多选、%1$d题</string>
     <!-- 拓展资源练习：入口在「我的」页成就卡下方，成绩不参与排行榜排名 -->
     <string name="profile_extension_title">拓展资源练习</string>
-    <string name="profile_extension_note">专项巩固，随时可练 · 不计入排行榜排名</string>
+    <string name="profile_extension_note">专项巩固，随时可练、不计入排行榜排名</string>
     <string name="hint_input_word">输入英文单词</string>
     <string name="action_play_again">再来一局</string>
     <string name="action_view_leaderboard">查看排行榜</string>

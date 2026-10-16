@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.R
@@ -140,6 +141,9 @@ fun ProfileScreen(
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
+                                // 截断要留痕迹：字体放大或 streak 涨到三位数时，
+                                // 没有 Ellipsis 就是静默裁字，用户以为数据就只有这些
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
                             if (ov.streakDays >= 10) {
@@ -152,11 +156,12 @@ fun ProfileScreen(
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "历史最长连续${ov.bestStreak}天· " +
+                            text = "历史最长连续${ov.bestStreak}天、" +
                                 "累计学习${ov.totalMinutes}分钟",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Spacer(Modifier.height(10.dp))
                         // 用 FlowRow 而不是 Row：文案从「掌握 N 词」加长成「熟悉以上 N 词」之后，
@@ -393,7 +398,8 @@ private fun TierCard(learnedWords: Int) {
                     fontSize = 30.sp,
                     fontWeight = FontWeight.Bold,
                     color = fg,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(

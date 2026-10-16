@@ -141,7 +141,10 @@ fun QuizScreen(
      * 同样存在，自动塞回一局旧题会让用户觉得应用记住了他不想要的东西。
      */
     var restorable by remember { mutableStateOf<RestorableQuiz?>(null) }
-    LaunchedEffect(state.active, state.finished) {
+    // 快照版本号：点了「继续」但恢复失败时，本局的 active/finished 两个键都不会变，
+    // 只靠它们重算会让那张卡片变成「点了没反应的死按钮」。见 AppViewModel.quizSnapshotEpoch。
+    val snapshotEpoch by vm.quizSnapshotEpoch.collectAsState()
+    LaunchedEffect(state.active, state.finished, snapshotEpoch) {
         restorable = if (!state.active && !state.finished) vm.peekRestorableQuiz() else null
     }
 
@@ -291,7 +294,10 @@ private fun QuizPicker(
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    text = "${WordDb.stageLabel(stage)}词库、每关${UNIT_QUIZ_COUNT}题、选义/拼写两种题型",
+                    // 「每关10题」改成「每关最多10题」：首字母挑战从该字母的全部单词里抽题，
+                    // 小词量字母（实测四级 z 只有 5 个、y 10 个）凑不满 10 道，
+                    // 原来的说法会让选关页承诺 10 题、答题页显示「第1/5题」。
+                    text = "${WordDb.stageLabel(stage)}词库、每关最多${UNIT_QUIZ_COUNT}题、选义/拼写两种题型",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -299,7 +305,7 @@ private fun QuizPicker(
                 AppCard(color = LocalAppColors.current.cardAmber, padding = 14.dp) {
                     Text(
                         text = "玩法：答对得分并累积连击，拼写题分值更高。" +
-                            "选择下方首字母开始${UNIT_QUIZ_COUNT}题挑战。",
+                            "选择下方首字母开始挑战。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -1189,7 +1195,17 @@ private fun SpellingQuestion(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "根据中文释义与发音拼写单词（${q.word.word.length}个字母）",
+            // 提示的是**字母数**，不是字符串长度：词库里有 22 条带连字符的复合词
+            // （father-in-law 13 个字符、11 个字母），照 .length 报数会让人按 13 个
+            // 字母去凑，而判分要求连字符原样写出，于是「数字对不上」看着像判分出错。
+            text = buildString {
+                append("根据中文释义与发音拼写单词（${q.word.word.count { it.isLetter() }}个字母")
+                when {
+                    '-' in q.word.word -> append("、含连字符")
+                    ' ' in q.word.word -> append("、含空格")
+                }
+                append('）')
+            },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(),
@@ -1345,14 +1361,23 @@ private fun QuizResult(
             Text(
                 text = when {
                     isRedo -> {
-                        // remainingWrong 由结算时回查错题集得到（-1 表示没查到，不该出现）
-                        val left = if (state.remainingWrong >= 0) state.remainingWrong else 0
-                        if (left == 0) {
-                            "本次是错题重做，${total}题里答对${state.correctCount}题，" +
-                                "待重做的错题已经全部清完。成绩不计入排行榜与成就。"
-                        } else {
-                            "本次是错题重做，答对的${state.correctCount}题已移出错题集，" +
-                                "还剩${left}题待重做。成绩不计入排行榜与成就。"
+                        /*
+                         * remainingWrong 由结算时回查错题集得到，-1 是「没数出来」的哨兵值。
+                         * 早前这里 `if (remainingWrong >= 0) ... else 0` 把哨兵当成 0，
+                         * 于是读库失败也理直气壮地播报「待重做的错题已经全部清完」——
+                         * 一句没有依据的成功结论。数不出来就照实说数不出来。
+                         */
+                        val left = state.remainingWrong
+                        when {
+                            left == 0 ->
+                                "本次是错题重做，${total}题里答对${state.correctCount}题，" +
+                                    "待重做的错题已经全部清完。成绩不计入排行榜与成就。"
+                            left < 0 ->
+                                "本次是错题重做，答对的${state.correctCount}题已移出错题集，" +
+                                    "剩余数量这次没统计出来，可回排行榜查看。成绩不计入排行榜与成就。"
+                            else ->
+                                "本次是错题重做，答对的${state.correctCount}题已移出错题集，" +
+                                    "还剩${left}题待重做。成绩不计入排行榜与成就。"
                         }
                     }
                     isExtension -> "本次是拓展资源练习，成绩不计入排行榜排名，可以反复练到全对。"

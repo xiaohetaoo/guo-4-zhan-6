@@ -25,6 +25,7 @@ import com.hdu.cetvocab.data.STAGE_QUIZ_COUNT
 import com.hdu.cetvocab.data.WRONG_REDO_LIMIT
 import com.hdu.cetvocab.data.WRONG_STUDY_LIMIT
 import com.hdu.cetvocab.data.StudyOverview
+import com.hdu.cetvocab.data.percentOf
 import com.hdu.cetvocab.data.UNIT_QUIZ_COUNT
 import com.hdu.cetvocab.data.VocabRepository
 import com.hdu.cetvocab.data.Word
@@ -36,12 +37,15 @@ import com.hdu.cetvocab.util.LauncherIcons
 import com.hdu.cetvocab.util.Sfx
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -229,6 +233,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         Motion.applyAnimationsEnabled(repo.animationsEnabled)
     }
 
+    override fun onCleared() {
+        // Sfx 里有一条单线程 Executor（线程设了 daemon，不会拦住进程退出），
+        // 但播放中的 AudioTrack 要靠它的队列任务释放。
+        // ViewModel 销毁时不 shutdown 的话，待释放的尾音任务就再也没机会跑，
+        // 音轨悬在系统里 —— 正是 Sfx 注释里点名要避免的那类泄漏。
+        sfx.shutdown()
+        super.onCleared()
+    }
+
     private val _home = MutableStateFlow(HomeUiState())
     val home: StateFlow<HomeUiState> = _home.asStateFlow()
 
@@ -257,6 +270,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var profileJob: Job? = null
     private var searchJob: Job? = null
     private var finishJob: Job? = null
+
+    /**
+     * 尚未落库的逐题作答写入（错题集 / 错词计数）。
+     *
+     * 结算页的「待重做错题还剩 N 道」直接数 quiz_wrong 表，而每答一题的入库
+     * 是另一条发出去就不管的协程。末题答错后立刻结算，读表常常赶在写入之前，
+     * 于是明明刚错了一道、结算页却说「错题集已经全部清完」—— 少报的正是最后那一两道。
+     * 这里把在飞的写入登记下来，结算前 join 完再去数。
+     * 只在主线程增删（作答与结算都由点击驱动），不需要并发容器。
+     */
+    private val answerWrites = ArrayList<Job>()
 
     /**
      * 作答处理中标志。
@@ -353,9 +377,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setStage(stage: Int) {
         repo.stage = stage
         // 学习进度按 word_id 独立存放，两个级别互不影响，切换时不需要重置任何进度。
-        // 这里只把新级别同步进首页状态，让按钮选中态与切换动画立即响应，
+        // 这里把新级别同时同步进首页与「我的」状态，让按钮选中态立即响应，
         // 词数 / 进度等具体数据随后由 refreshAll() 异步补齐（本地库，通常几十毫秒）。
+        // 「我的」这一份不能省：refreshProfile 的合并逻辑刻意保留 old.stage
+        // （见其注释），页面自己不会从 repo 重新取值，只改 _home 的话
+        // 「当前阶段」会一直停在进应用时的那一刻，与首页/词库不一致。
         _home.update { it.copy(stage = stage) }
+        _profile.update { it.copy(stage = stage) }
         refreshAll()
     }
 
@@ -391,6 +419,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setDailyGoal(goal: Int) {
         repo.dailyGoal = goal
+        // 与 setStage 同理：refreshProfile 刻意保留 old.goal，
+        // 不先写 _profile 的话，设置页滑杆改完目标、「我的」页仍显示旧值。
+        _profile.update { it.copy(goal = goal) }
         refreshHome()
         refreshProfile()
     }
@@ -441,17 +472,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             quizScreenActive = false
             _study.value = StudyUiState()
             _quiz.value = QuizUiState()
-            refreshAll()
+            // prefsFromRepo=true：resetAll 里 prefs.edit().clear() 把设置全恢复成默认，
+            // _profile 里缓存的旧设置必须整体作废，否则各开关显示的还是清空前的状态。
+            refreshAll(prefsFromRepo = true)
             notify("学习数据已清空")
         }
     }
 
-    fun refreshAll() {
-        // 备份恢复 / 清空数据都会改到动效开关，这里统一再同步一次。
+    /**
+     * 全量刷新。
+     *
+     * [prefsFromRepo] 用于「外部把偏好整体换掉了」的两个场景：清空数据（prefs.clear()）
+     * 和从备份恢复（写回备份里的级别 / 目标 / 语速 / 各开关）。
+     * 这两种情况下 [_profile] 里缓存的设置已经不属于本机现状，
+     * 必须整体采用刚从 repo 读出来的那一份；默认 false 走合并逻辑，
+     * 保住用户在读表期间刚刚拨动的开关（见 [refreshProfile] 的注释）。
+     */
+    fun refreshAll(prefsFromRepo: Boolean = false) {
+        // 备份恢复 / 清空数据会连带改掉动效与音效开关，这里统一再同步一次运行时状态：
+        // Motion 是全局对象、sfx.enabled 是播放线程读的 volatile 标志，
+        // 只改偏好不推给它们的话，用户要重开应用才看得到效果。
         Motion.applyAnimationsEnabled(repo.animationsEnabled)
+        sfx.enabled = repo.soundEnabled
         refreshHome()
         refreshLearn()
-        refreshProfile()
+        refreshProfile(prefsFromRepo)
     }
 
     // ---------- 学习 ----------
@@ -730,14 +775,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 收藏操作的串行锁。
+     *
+     * `UserDb.toggleFav` 自己在事务里读改写，库里不会错；问题出在 UI 这一侧：
+     * 每个协程拿到「自己那次翻转的结果」再写进 `favIds` 集合，连点两下时
+     * 两个协程的 IO 完成顺序不确定，后发起的那次可能先写回集合，
+     * 于是界面停在第一次的结果上（图标显示已收藏、库里其实是未收藏）。
+     * 把「写库 + 写回 UI」整体串行，两次连点就变成有序的翻两次。
+     */
+    private val favMutex = Mutex()
+
     fun toggleFavCurrent() {
         val word = _study.value.current ?: return
         viewModelScope.launch {
-            val fav = withContext(Dispatchers.IO) { repo.toggleFav(word) }
-            _study.update {
-                val set = it.favIds.toMutableSet()
-                if (fav) set.add(word.id) else set.remove(word.id)
-                it.copy(favIds = set)
+            favMutex.withLock {
+                val fav = withContext(Dispatchers.IO) { repo.toggleFav(word) }
+                _study.update {
+                    val set = it.favIds.toMutableSet()
+                    if (fav) set.add(word.id) else set.remove(word.id)
+                    it.copy(favIds = set)
+                }
             }
             refreshLearn()
         }
@@ -745,7 +803,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleFav(word: Word) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { repo.toggleFav(word) }
+            favMutex.withLock { withContext(Dispatchers.IO) { repo.toggleFav(word) } }
             refreshLearn()
             refreshProfile()
         }
@@ -929,13 +987,30 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             put("elapsed", s.elapsedMs)
             put("ts", System.currentTimeMillis())
         }
+        // 只在「从无到有」时推进版本号：saveQuizSnapshot 每题都会调用，
+        // 每写一次就自增会让选关页每答一题重新解析一遍快照 JSON，毫无收益。
+        val hadSnapshot = repo.quizSessionSnapshot != null
         repo.quizSessionSnapshot = json.toString()
+        if (!hadSnapshot) _quizSnapshotEpoch.update { it + 1 }
     }
 
     private fun clearQuizSnapshot() {
         quizSpec = null
         repo.quizSessionSnapshot = null
+        _quizSnapshotEpoch.update { it + 1 }
     }
+
+    /**
+     * 闯关快照的版本号，每次写入或清除快照时自增。
+     *
+     * 选关页的「有一局没打完」卡片用它当重算依据之一。卡片原本只按
+     * `state.active / state.finished` 两个键去 peek，而「恢复失败」这条路径
+     * 既不进入关卡也不结束关卡 —— 两个键都没变，卡片就留在页上变成死按钮
+     * （点「继续」只会在原地再提示一次无法还原）。快照本身才是这张卡片的依据，
+     * 所以让它来触发重算。
+     */
+    private val _quizSnapshotEpoch = MutableStateFlow(0L)
+    val quizSnapshotEpoch: StateFlow<Long> = _quizSnapshotEpoch.asStateFlow()
 
     /**
      * 读取并校验可恢复的上一局（不改变任何状态，供选关页决定要不要挂提示条）。
@@ -985,7 +1060,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             combo = obj.optInt("combo", 0),
             maxCombo = obj.optInt("maxCombo", 0),
             elapsedMs = obj.optLong("elapsed", 0L),
-            remaining = ((RESTORE_WINDOW_MS - (System.currentTimeMillis() - ts)) / 60_000L).toInt().coerceAtLeast(0) + 1
+            // 剩余分钟数向上取整（不足一分钟也算「1 分钟内可继续」），
+            // 但必须夹在 1..30：早先写成「整除后 +1」，快照刚写入那一刻
+            // 30 分钟整除得 30、再 +1 就报「约31分钟内可继续」，比窗口本身还长。
+            remaining = ((RESTORE_WINDOW_MS - (System.currentTimeMillis() - ts) + 59_999L) / 60_000L)
+                .toInt().coerceIn(1, (RESTORE_WINDOW_MS / 60_000L).toInt())
         )
     }
 
@@ -1002,11 +1081,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val questions = withContext(Dispatchers.IO) { repo.rebuildQuiz(from.spec) }
             if (questions.size != from.spec.count) {
+                /*
+                 * 恢复失败时必须把选关页那张「有一局没打完」的卡片一起收掉。
+                 * clearQuizSnapshot() 只清了持久化快照，[QuizUiState] 一个字节都没动，
+                 * 而卡片是页面按 `state.active/state.finished` 两个键重算的
+                 * —— 失败路径上这俩仍是 (false, false)，键值没变，
+                 * remember 不重算，于是「继续」按钮还挂在页上，点下去只会再提示一次无法还原。
+                 * 推进会话号让页面拿到一次新的重算依据，卡片随快照一起消失。
+                 */
                 clearQuizSnapshot()
-                notify("上一局的题目已无法还原，已为你开始新的选关")
+                notify("上一局的题目已无法还原，请重新选关")
                 return@launch
             }
             val index = from.index.coerceIn(0, questions.size - 1)
+            /*
+             * 恢复路径必须把开局路径上的记账一件不落补齐，否则「恢复出来的那一局」
+             * 和「新开的这一局」行为不一致。这里补两项：
+             * 1. isRedo —— 漏掉它，错题重做被进程回收再恢复后就变成普通闯关，
+             *    打完会把成绩写进排行榜并触发成就，正是这个功能刻意要避免的事
+             *    （同一批题可以无限重做，刷出满分毫无意义）。
+             * 2. finishJob / finishing / quizSession —— 上一局尚未写完的结算协程
+             *    若还挂在路上，`finishing` 会把这一局的所有作答全挡掉；
+             *    会话号不推进，那次迟到的写入还会盖到刚恢复出来的这一局上。
+             */
+            finishJob?.cancel()
+            finishJob = null
+            finishing = false
+            quizSession++
             _quiz.value = QuizUiState(
                 active = true,
                 stage = from.spec.stage,
@@ -1017,7 +1118,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 correctCount = from.correct,
                 combo = from.combo,
                 maxCombo = from.maxCombo,
-                elapsedMs = from.elapsedMs
+                elapsedMs = from.elapsedMs,
+                isRedo = from.spec.kind == QUIZ_SPEC_WRONG
             )
             quizSpec = from.spec
             questionStartTs = System.currentTimeMillis()
@@ -1041,7 +1143,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             openQuiz(
                 challengeStage, unit, questions,
-                QuizSpec(if (unit < 0) QUIZ_SPEC_STAGE else QUIZ_SPEC_UNIT, challengeStage, unit, count, seed)
+                // count 存**实际出题数**而不是请求数：小单元的题量本来就少于上限，
+                // 存 10 会让 resumeQuiz 的 `questions.size != spec.count` 恒不成立，
+                // 这一局永远恢复不了（首字母挑战的 z/y 等小词量字母同理）。
+                QuizSpec(
+                    if (unit < 0) QUIZ_SPEC_STAGE else QUIZ_SPEC_UNIT,
+                    challengeStage, unit, questions.size, seed
+                )
             )
         }
     }
@@ -1094,7 +1202,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             openQuiz(
                 challengeStage, QUIZ_SCOPE_CONFUSABLE, questions,
-                QuizSpec(QUIZ_SPEC_CONFUSABLE, challengeStage, QUIZ_SCOPE_CONFUSABLE, UNIT_QUIZ_COUNT, seed),
+                QuizSpec(QUIZ_SPEC_CONFUSABLE, challengeStage, QUIZ_SCOPE_CONFUSABLE, questions.size, seed),
                 onReady
             )
         }
@@ -1116,7 +1224,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             openQuiz(
                 challengeStage, QUIZ_SCOPE_TRANSLATION, questions,
-                QuizSpec(QUIZ_SPEC_TRANSLATION, challengeStage, QUIZ_SCOPE_TRANSLATION, UNIT_QUIZ_COUNT, seed),
+                QuizSpec(QUIZ_SPEC_TRANSLATION, challengeStage, QUIZ_SCOPE_TRANSLATION, questions.size, seed),
                 onReady
             )
         }
@@ -1139,7 +1247,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             openQuiz(
                 challengeStage, scope, questions,
-                QuizSpec(QUIZ_SPEC_LETTER, challengeStage, scope, UNIT_QUIZ_COUNT, seed)
+                QuizSpec(QUIZ_SPEC_LETTER, challengeStage, scope, questions.size, seed)
             )
         }
     }
@@ -1236,7 +1344,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 三个调用点都在主线程，applied 只会被真正提交的那一次置真。
         if (!applied || question == null) return
         sfx.play(correct)
-        viewModelScope.launch(Dispatchers.IO) {
+        // 先清掉已经跑完的，再登记本次的。两个动作都在主线程（applyAnswer 由点击触发），
+        // 所以这个集合不需要加锁；不要在 invokeOnCompletion 里删 —— 那个回调线程不确定。
+        answerWrites.removeAll { it.isCompleted }
+        answerWrites += viewModelScope.launch(Dispatchers.IO) {
             repo.onQuizAnswered(challengeStage, question.word, question.kind, correct)
         }
     }
@@ -1301,8 +1412,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val state = _quiz.value
         val session = quizSession
         val duration = state.elapsedMs
-        val accuracy = if (state.questions.isEmpty()) 0
-        else state.correctCount * 100 / state.questions.size
+        val accuracy = percentOf(state.correctCount, state.questions.size)
+        // 星级必须与结算页显示的那个正确率同口径。
+        // 早期这里写的是 `correctCount * 100 / questions.size`（整数截断），
+        // 而 QuizScreen 显示用 percentOf（四舍五入）：49 题对 44 题，
+        // 页面写「正确率90%」、星数却按 89% 只给两颗星，用户会当成判分出错。
         val stars = when {
             accuracy >= 90 -> 3
             accuracy >= 70 -> 2
@@ -1310,6 +1424,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             else -> 0
         }
         finishJob = viewModelScope.launch {
+            // 等所有逐题写入落库，再去数错题集。见 [answerWrites]。
+            // 放在这里而不是 applyAnswer 里串行：逐题入库本来就该是异步的，
+            // 让它挡住下一题的点击会让答题手感变粘。
+            answerWrites.toList().joinAll()
             val isRedo = state.isRedo
             val gained = withContext(Dispatchers.IO) {
                 if (isRedo) {
@@ -1477,7 +1595,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 runCatching { withContext(Dispatchers.IO) { backup.restore(file) } }
                     .onSuccess { report ->
-                        refreshAll()
+                        // 备份里带着级别 / 目标 / 语速 / 各开关，恢复成功后 _profile
+                        // 必须整体换成备份那份，不能让合并逻辑把 old 的当前设置留下。
+                        refreshAll(prefsFromRepo = true)
                         notify(
                             buildString {
                                 append("已从「${file.name}」恢复学习数据")
@@ -1494,7 +1614,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- 我的 / 成就 / 排行榜 ----------
 
-    fun refreshProfile() {
+    fun refreshProfile(prefsFromRepo: Boolean = false) {
         profileJob?.cancel()
         profileJob = viewModelScope.launch {
             val data = withContext(Dispatchers.IO) {
@@ -1524,9 +1644,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
              * 表现为「进「我的」页顺手切深色，界面闪一下又变回浅色」。
              * 首次加载（loading=true）时当前值还是默认值，必须整体采用 data，
              * 否则会把默认的级别 / 目标一路带进会话里。
+             *
+             * 保留 old 值的前提是：**每个 setter 都会立刻把它写进 _profile**。
+             * 级别与每日目标早期是例外（只写 _home / 只刷库），于是这里保留的
+             * 是「从没被更新过的旧值」，「我的」和设置页就永远显示进应用时的级别和目标。
+             * 现在 setStage / setDailyGoal 已经补上回写；新增设置项时请照同一套做，
+             * 只写偏好不回写 _profile 的设置项，在这个合并逻辑下必然显示旧值。
+             *
+             * prefsFromRepo=true 时跳过合并：清空数据与恢复备份已经把偏好整体换掉，
+             * old 里的值不再代表本机现状。
              */
             _profile.update { old ->
-                if (old.loading) data
+                if (old.loading || prefsFromRepo) data
                 else data.copy(
                     goal = old.goal,
                     autoSpeak = old.autoSpeak,

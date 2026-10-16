@@ -241,7 +241,10 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                         NavigationBarItem(
                             selected = route == tab.route,
                             onClick = { goTab(i) },
-                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            // 图标不给朗读文本：下面已经有 label = Text(tab.label)，
+                            // NavigationBarItem 会把两者合并成一个可点击节点，
+                            // 两边都给语义 TalkBack 就念「首页 首页」。
+                            icon = { Icon(tab.icon, contentDescription = null) },
                             label = { Text(tab.label) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = MaterialTheme.colorScheme.onPrimary,
@@ -341,6 +344,15 @@ private fun AppNavHost(
      */
     fun goStudy() = nav.navigate(Routes.STUDY) { launchSingleTop = true }
 
+    /**
+     * 进二级页（单词详情 / 排行榜 / 成就墙 / 设置）统一走这里。
+     *
+     * 与 [goStudy] 同一个道理，而且这里的窗口更宽：转场动画约 300ms，
+     * 期间旧页面还在组合、还能接点击。连点两下同一个词（或同一行入口）
+     * 就会压进两张一模一样的详情页，看完必须按两次返回才退得出去。
+     */
+    fun goPage(route: String) = nav.navigate(route) { launchSingleTop = true }
+
     NavHost(
         navController = nav,
         startDestination = Routes.HOME,
@@ -395,7 +407,7 @@ private fun AppNavHost(
                 onOpenUnit = { unit ->
                     vm.startUnitStudy(unit) { ok -> if (ok) goStudy() }
                 },
-                onOpenWord = { id -> nav.navigate("${Routes.WORD}/$id") },
+                onOpenWord = { id -> goPage("${Routes.WORD}/$id") },
                 onStartFav = {
                     vm.startFavStudy { ok -> if (ok) goStudy() }
                 },
@@ -418,15 +430,15 @@ private fun AppNavHost(
                 onOpenProfile = { goTab(TABS.indexOfFirst { it.route == Routes.PROFILE }) },
                 onSpeak = speak,
                 onSpeakAuto = speakAuto,
-                onOpenLeaderboard = { nav.navigate(Routes.LEADERBOARD) }
+                onOpenLeaderboard = { goPage(Routes.LEADERBOARD) }
             )
         }
 
         composable(Routes.PROFILE) {
             ProfileScreen(
                 vm = vm,
-                onOpenAchievements = { nav.navigate(Routes.ACHIEVEMENTS) },
-                onOpenSettings = { nav.navigate(Routes.SETTINGS) },
+                onOpenAchievements = { goPage(Routes.ACHIEVEMENTS) },
+                onOpenSettings = { goPage(Routes.SETTINGS) },
                 // 拓展资源练习：入口在「我的」页，但答题界面复用闯关页。
                 // **装好题再切标签**：此前是先 goTab、再异步装题库，
                 // 用户会先看到闯关选关页闪一下才进关卡；题库为空时更是直接停在选关页。

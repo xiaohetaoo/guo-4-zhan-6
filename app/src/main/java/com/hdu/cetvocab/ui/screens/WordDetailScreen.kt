@@ -86,11 +86,13 @@ fun WordDetailScreen(
     var level by remember(wordId) { mutableStateOf(0) }
 
     LaunchedEffect(wordId) {
-        withContext(Dispatchers.IO) {
-            val st = repo.userDb.stateOf(wordId)
-            fav = st.fav
-            level = st.level
-        }
+        // 只把**读库**放到 IO 线程，赋值必须回到主线程。
+        // 写在 withContext(IO) 块里等于从协程线程改快照状态：Compose 的快照系统
+        // 对非主线程写入走的是全局写锁，不保证被这一次组合观察到，
+        // 表现就是偶尔进详情页收藏态/等级不更新，得退出重进才显示出来。
+        val st = withContext(Dispatchers.IO) { repo.userDb.stateOf(wordId) }
+        fav = st.fav
+        level = st.level
         favLoaded = true
     }
 

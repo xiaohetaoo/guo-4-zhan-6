@@ -12,9 +12,17 @@ data class Word(
     val pos: String,
     /** 1 = 四级大纲，2 = 六级大纲 */
     val stage: Int,
-    /** 阶段内单元号（每 50 词一单元），对齐官方词表顺序 */
+    /** 阶段内单元号（每 50 词一单元）。分组依据见 [rank]：按字母序切块，不是官方词表顺序 */
     val unit: Int,
-    /** 阶段内序号（按官方词表顺序） */
+    /**
+     * 阶段内序号，从 1 开始。
+     *
+     * **按单词字母序**编号，不是官方词表顺序、也不是词频：
+     * `tools/build_words_db.py` 里 `ordered = sorted(words)` 之后 `rank = i + 1`。
+     * 界面（单词详情页的「字母序第 N 位」）与出题排序都按这个口径写，
+     * 别把它读成「第 N 高频词」—— 排序规则一改，rank 的含义就跟着变，
+     * 而闯关重放依赖「同一 seed + 同一 rank 顺序 → 同一题序」，注释与实际必须一致。
+     */
     val rank: Int,
     val sentence: String,
     val sentenceCn: String,

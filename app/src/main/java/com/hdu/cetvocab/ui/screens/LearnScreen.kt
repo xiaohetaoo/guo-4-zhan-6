@@ -96,9 +96,22 @@ fun LearnScreen(
      * 必须只在「真的换了级别」时重置：LaunchedEffect 在首次组合也会跑一次，
      * 无条件重置会让进程被回收后重建时刚恢复出来的 tab / 浏览态又被抹掉，
      * 等于用一个体验问题换另一个。
+     *
+     * 两个「假的变更」要分开挡：
+     * · state.loading 期间 state.stage 是快照的**默认级别**（四级），六级用户
+     *   进词库页时它会从 1 变成 2，这不是用户切换；
+     * · 首次认值（lastStage 还是 -1）也不算切换，否则同一件事会再触发一次。
+     * 初值刻意用 -1 而不是 state.stage：用当前值当初始值就等于把
+     * 「冷启动那一刻的默认级别」记成用户的选择，六级用户每次进词库页
+     * 都会被上面那段逻辑抹掉刚恢复出来的浏览态。
      */
-    var lastStage by rememberSaveable { mutableStateOf(state.stage) }
-    LaunchedEffect(state.stage) {
+    var lastStage by rememberSaveable { mutableStateOf(-1) }
+    LaunchedEffect(state.stage, state.loading) {
+        if (state.loading) return@LaunchedEffect
+        if (lastStage < 0) {
+            lastStage = state.stage
+            return@LaunchedEffect
+        }
         if (lastStage != state.stage) {
             lastStage = state.stage
             showingAllWords = false
@@ -282,7 +295,11 @@ fun LearnScreen(
                     map
                 }
                 val letters = letterStarts.keys.toList()
-                val currentLetter by remember(letters) {
+                // key 必须是 letterStarts 而不是 letters：侧边字母条算「当前高亮哪个字母」
+                // 读的是**下标表**，而重新装载词表后字母集合往往一模一样（还是那 26 个字母）、
+                // 每组词数却变了。用 letters 当 key 会让 derivedStateOf 一直持有旧的
+                // 下标表，滚动时高亮按老位置跳，指到错误的字母上。
+                val currentLetter by remember(letterStarts) {
                     derivedStateOf {
                         val idx = listState.firstVisibleItemIndex
                         var cur = letters.firstOrNull()

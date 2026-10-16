@@ -92,20 +92,20 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     // 导出 / 备份 / 恢复的结果由 ViewModel 统一持有：
     // 这些是文件 IO，不能在页面作用域里跑（用户一离开页面协程就被取消，
     // 会留下写了一半的文件）。
+    // 结果由 ViewModel 持有，因此用户点完「导出」立刻返回上一页时任务照跑，
+    // 完成后写入的结果却没人消费 —— 于是下次（可能是几天后）进设置页会凭空
+    // 弹出一条过期成功框。进页面时先把上一次的遗留结果丢掉：文件本身已经落盘，
+    // 真要路径再导一次即可，一条几小时前的成功提示没有参考价值。
+    //
+    // 清空必须发生在 collectAsState **之前**，所以放在 remember 的初始化块里而不是
+    // 页尾的 LaunchedEffect：collectAsState 拿 StateFlow 的当前值当组合初值，
+    // LaunchedEffect 要等这一帧组合完才跑，于是过期成功框会先显示一帧再消失。
+    remember { vm.consumeFileDone() to vm.consumeFileError() }
     val fileDone by vm.fileDone.collectAsState()
     val fileError by vm.fileError.collectAsState()
     // 有文件任务在跑时把四行禁用：连点会并发写盘，备份名只到秒，
     // 同一秒内的两次会算出同一个路径，交错写盘能留下一个半截 JSON
     val fileBusy by vm.fileBusy.collectAsState()
-
-    // 结果由 ViewModel 持有，因此用户点完「导出」立刻返回上一页时任务照跑，
-    // 完成后写入的结果却没人消费 —— 于是下次（可能是几天后）进设置页会凭空
-    // 弹出一条过期成功框。进页面时先把上一次的遗留结果丢掉：文件本身已经落盘，
-    // 真要路径再导一次即可，一条几小时前的成功提示没有参考价值。
-    LaunchedEffect(Unit) {
-        vm.consumeFileDone()
-        vm.consumeFileError()
-    }
 
     // 恢复流程状态（纯 UI 选择，不需要跨页面存活）
     var restoreChoices by remember { mutableStateOf<List<File>>(emptyList()) }
@@ -171,11 +171,16 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         onValueChange = { goalSlider = it },
                         onValueChangeFinished = { vm.setDailyGoal(goalSlider.roundToInt()) },
                         valueRange = 5f..100f,
-                        // 5..100 共 95 词，steps 要取「档位数 - 2」= 94，即一格一词。
-                        // 此前写的是 18：M3 的离散档位 = 区间 / (steps + 2) = 95/20 = 4.75，
-                        // 落点变成 5 / 9.75 / 14.5 / 19.25 / 24…，显示四舍五入后
-                        // 相邻两档忽 +5 忽 +4，而且**默认目标 20 根本选不出来**
-                        // —— 一碰滑杆就跳到 19 或 24。
+                        /*
+                         * Compose Slider 的 `steps` 是「两端之间的内部档数」：
+                         * 可选值个数 = steps + 2，相邻档位间隔 = (end - start) / (steps + 1)。
+                         * 所以 5..100（共 95 词）要「一格一词」得写 94：95 / (94 + 1) = 1。
+                         *
+                         * 此前写的是 18，间隔 = 95 / 19 = 5 —— 落点是 5、10、15…100，
+                         * 每一格能选、不会跳，但只能按 5 递增：想把每日目标调成 23 词都做不到，
+                         * 而学习页/首页的目标口径是任意整数。这里改成 94 是为了让滑杆的
+                         * 可选值与那个口径对齐，不是修「选不出默认值」那样的坏档。
+                         */
                         steps = 94,
                         colors = SliderDefaults.colors(
                             thumbColor = MaterialTheme.colorScheme.primary,

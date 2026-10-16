@@ -85,7 +85,10 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
                 "last_ts INTEGER NOT NULL DEFAULT 0," +
                 "PRIMARY KEY(stage, kind, word_id))"
         )
-        // 重做队列按「错得多 → 错得早」排序，这两个索引让排序走索引而不是全表排序
+        // 重做队列按「错得多 → 错得早」排序。这个索引服务的是 `WHERE stage=?` 这一步过滤
+        // （本表行数很少，取题时的两列排序走不到索引，也没有必要走）。
+        // 不要指望它省掉排序：ORDER BY 是 wrong_count DESC + last_ts ASC 的混向排序，
+        // 索引只能整体正扫或整体倒扫，混向顺序永远用不上索引排序。
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_wrong_stage ON quiz_wrong(stage, wrong_count, last_ts)")
     }
 
@@ -119,6 +122,25 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         // if (oldVersion < 4) { db.execSQL("ALTER TABLE ...") }
         // 迁移一律用 ALTER / UPDATE 增量完成，不做破坏性重建。
     }
+
+    /**
+     * 降级（同一台设备上装了比现有库更旧的 APK）。
+     *
+     * 默认实现是直接抛 `SQLiteException: A downgrade ... cannot be performed`，
+     * 而它发生在 `getWritableDatabase()` 里 —— 本类的读方法遍布首页 / 词库 / 我的，
+     * 结果是老版本 APK 一装上去就**每次启动都崩**，用户除了卸载（连带丢掉全部进度）
+     * 没有别的出路。这是侧载场景（我们的分发方式正是发 APK），不是理论问题。
+     *
+     * 这里选择空实现而不是「删库重建」：本项目的迁移全是加列 / 加表
+     * （v1→v2 三个 SM-2 列、v2→v3 一张 quiz_wrong），旧版代码读新版库时
+     * 那些多出来的列和表它根本不查询，留着不影响任何读写路径；
+     * 反过来一旦删库，用户进度就真没了 —— 两个代价明显不对称。
+     *
+     * **前提**：以后若出现「改列语义 / 删列 / 重算数据」这类非增量迁移，
+     * 这个空实现就不再安全，必须在这里显式处理（例如把不兼容的表清掉），
+     * 并把这条写进迁移注释里。
+     */
+    override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
 
     // ---------- 单词状态 ----------
 
@@ -587,19 +609,26 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         val db = writableDatabase
         db.beginTransaction()
         try {
-            val cur = getMeta("study_seconds", "0").toLongOrNull() ?: 0L
-            setMeta("study_seconds", (cur + seconds).toString())
+            val cur = getMeta(KEY_STUDY_SECONDS, "0").toLongOrNull() ?: 0L
+            setMeta(KEY_STUDY_SECONDS, (cur + seconds).toString())
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
     }
 
-    fun studySeconds(): Long = getMeta("study_seconds", "0").toLongOrNull() ?: 0L
+    fun studySeconds(): Long = getMeta(KEY_STUDY_SECONDS, "0").toLongOrNull() ?: 0L
 
     companion object {
         const val DB_NAME = "user_data.db"
         const val DB_VERSION = 3
+
+        /**
+         * app_meta 里唯一在用的键：累计学习秒数。
+         * 写成常量而不是散落的字面量，是因为恢复侧也要按这个键判断「值必须是数字」，
+         * 两边各写一遍字符串迟早会漂。
+         */
+        const val KEY_STUDY_SECONDS = "study_seconds"
 
         /** word_state 的全部列，顺序与 [toWordState] 的下标严格对应 */
         private const val STATE_COLUMNS =

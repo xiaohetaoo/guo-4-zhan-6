@@ -324,6 +324,25 @@ class BackupManager(
             "「${file.name}」的错题集数据段格式不是预期的数组，已中止恢复（现有数据未做任何改动）"
         }
         val wrongArr = wrongRaw as? JSONArray
+        /*
+         * 成就与 app_meta 同样是「写了值就必须是数组」的段。
+         * 它们当初不在校验里，是因为读的时候用了 `optJSONArray(...).objects()`，
+         * 而 objects() 对 null 返回空列表 —— 于是 `"achievement": {}` 这种
+         * 读不出任何一条记录的输入会一路走到写回：先 DELETE FROM achievement
+         * 再插 0 行，成就墙被清空却提示「恢复成功」。
+         * 这与上面 quiz_wrong 那段注释描述的是同一个陷阱，只是当时只堵了一半。
+         * app_meta 里存的是累计学习秒数，被清空等于把「累计学习 N 分钟」抹成 0。
+         */
+        val achRaw = root.opt("achievement")
+        require(achRaw == null || achRaw == JSONObject.NULL || achRaw is JSONArray) {
+            "「${file.name}」的成就数据段格式不是预期的数组，已中止恢复（现有数据未做任何改动）"
+        }
+        val achArr = achRaw as? JSONArray
+        val metaRaw = root.opt("app_meta")
+        require(metaRaw == null || metaRaw == JSONObject.NULL || metaRaw is JSONArray) {
+            "「${file.name}」的统计段格式不是预期的数组，已中止恢复（现有数据未做任何改动）"
+        }
+        val metaArr = metaRaw as? JSONArray
         val backupVersion = root.optInt("db_version", 0)
         require(backupVersion <= UserDb.DB_VERSION) {
             "这份备份的数据格式版本（v${backupVersion}）比当前应用支持的（v${UserDb.DB_VERSION}）更新，" +
@@ -343,6 +362,19 @@ class BackupManager(
         val logs = allLogs.filter { it.optInt("word_id", -1) in validIds }
         val quizzes = quizArr.objects()
         val skipped = (allStates.size - states.size) + (allLogs.size - logs.size)
+        /*
+         * 上面那道「至少有一段非空」的校验看的是**输入**，而孤儿过滤发生在它之后。
+         * 于是这种输入照样能走到写回：备份里确实有 200 条记录，但词库重排过、
+         * 200 个 word_id 全不在当前词库里 → 过滤后 states/logs 双双为空 →
+         * 仍然执行 6 张表的 DELETE 再插 0 行，最后提示「恢复成功」。
+         * 用户看到的是一次成功，实际是把进度清成了空库。
+         * 只有「备份本来就只存了闯关成绩」（states/logs 原本就是空的）才允许这样走过，
+         * 那种情况下清空学习状态是这份备份的正当语义。
+         */
+        require(states.isNotEmpty() || logs.isNotEmpty() || (allStates.isEmpty() && allLogs.isEmpty())) {
+            "「${file.name}」里的学习记录没有一条能对上当前词库（多半是备份来自旧版词表），" +
+                "恢复它只会清空现有数据，已中止（现有数据未做任何改动）"
+        }
 
         // ---------- 2. 写回：整段包在一个事务里，中途失败会自动回滚 ----------
         val db = userDb.writableDatabase
@@ -448,7 +480,7 @@ class BackupManager(
             // 恢复带回当前版本没有的成就码时，成就墙会显示「已解锁 100 / 81 个成就」，
             // 而进度条用的 fraction 大于 1 会直接触发 require 断言崩溃。
             val knownCodes = Achievements.ALL.mapTo(HashSet()) { it.code }
-            root.optJSONArray("achievement").objects()
+            achArr.objects()
                 .filter { it.optString("code") in knownCodes }
                 .forEach { o ->
                     db.insertWithOnConflict(
@@ -460,12 +492,26 @@ class BackupManager(
                         SQLiteDatabase.CONFLICT_REPLACE
                     )
                 }
-            root.optJSONArray("app_meta").objects().forEach { o ->
+            metaArr.objects().forEach { o ->
                 db.insertWithOnConflict(
                     "app_meta", null,
                     ContentValues().apply {
                         put("k", o.optString("k"))
-                        put("v", o.optString("v"))
+                        /*
+                         * 统计段的值必须是能解析回数字的字符串。app_meta 现在只存
+                         * study_seconds，而读它的一侧写的是 `getMeta(...).toLongOrNull() ?: 0`：
+                         * 恢复时放进一个非数字（手改、或未来新增的某个非数值键），
+                         * 下一次读就把累计学习时长静默当成 0，等于把「累计学习 N 分钟」清零。
+                         * 与其在写的一侧猜，不如在这里挡住 —— 解析不了的键直接不收。
+                         */
+                        val key = o.optString("k")
+                        val value = o.optString("v")
+                        if (key.isNotEmpty() &&
+                            (key != UserDb.KEY_STUDY_SECONDS || value.toLongOrNull() != null)
+                        ) {
+                            put("k", key)
+                            put("v", value)
+                        }
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
@@ -485,12 +531,26 @@ class BackupManager(
         // 另外用 commit() 而不是 apply()：apply 是异步落盘，进程被杀时写入可能丢失，
         // 而这里需要「恢复完成」这个语义是确定的。
         root.optJSONObject("prefs")?.let { p ->
+            /*
+             * 数据库那一段把每个数值都夹回合法区间，偏好这一段却原样写入。
+             * 后果更隐蔽：`stage` 写成 3 时 `repo.stage = 3` 不会报错，
+             * 而 wordsOfStage(3) 是空的 —— 首页、词库、闯关全部显示为空，
+             * 用户以为数据被恢复搞丢了，实际是偏好里一个越界数字。
+             * `goal` 同理：v1.4.2 专门修过「每日目标被改成非正数时首页说错话并藏掉
+             * 可用的继续学习按钮」，但那是判据侧的防御，恢复这一侧仍能把 0 写回偏好。
+             * 区间与设置页滑杆一致（目标 5..100、语速 0.5..1.4）。
+             */
             prefs.edit().apply {
-                if (p.has(KEY_STAGE)) putInt(KEY_STAGE, p.optInt(KEY_STAGE, WordDb.STAGE_CET4))
-                if (p.has(KEY_GOAL)) putInt(KEY_GOAL, p.optInt(KEY_GOAL, 20))
+                if (p.has(KEY_STAGE)) {
+                    putInt(KEY_STAGE, p.optInt(KEY_STAGE, WordDb.STAGE_CET4)
+                        .coerceIn(WordDb.STAGE_CET4, WordDb.STAGE_CET6))
+                }
+                if (p.has(KEY_GOAL)) putInt(KEY_GOAL, p.optInt(KEY_GOAL, 20).coerceIn(5, 100))
                 if (p.has(KEY_AUTOSPEAK)) putBoolean(KEY_AUTOSPEAK, p.optBoolean(KEY_AUTOSPEAK, true))
-                if (p.has(KEY_RATE)) putFloat(KEY_RATE, p.optDouble(KEY_RATE, 0.92).toFloat())
-                if (p.has(KEY_UNIT)) putInt(KEY_UNIT, p.optInt(KEY_UNIT, 0))
+                if (p.has(KEY_RATE)) {
+                    putFloat(KEY_RATE, p.optDouble(KEY_RATE, 0.92).toFloat().coerceIn(0.5f, 1.4f))
+                }
+                if (p.has(KEY_UNIT)) putInt(KEY_UNIT, p.optInt(KEY_UNIT, 0).coerceAtLeast(0))
                 if (p.has(KEY_ICON_STYLE)) {
                     putInt(KEY_ICON_STYLE, p.optInt(KEY_ICON_STYLE, LauncherIcons.STYLE_DEFAULT))
                 }

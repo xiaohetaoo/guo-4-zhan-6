@@ -253,14 +253,24 @@ class VocabRepository(context: Context) {
         return wordDb.wordsByIds(ids).sortedBy { it.word }
     }
 
+    /**
+     * 错词本：答过错、且还没练到「精通」档的词，错得多的排前面。
+     *
+     * 排序必须在取回词形**之后**再按 ids 的顺序摆一次。
+     * [WordDb.wordsByIds] 走的是 `id IN (...)` 且不带 ORDER BY（还按 999 个一批切块查询），
+     * 返回顺序是数据库给的顺序，于是上面那句 `sortedByDescending { wrongCount }`
+     * 会被它直接抹掉 —— 早期实现就是这样：错 5 次的词和错 1 次的词混在一起按 id 排，
+     * 「最该补的词在最前面」这个承诺从来没成立过。
+     */
     fun wrongWords(limit: Int = 60): List<Word> {
         val ids = userDb.states().values
             // 已答到「精通」档（LEVEL_EXPERT）的词不再占用错词本，避免只增不减
             .filter { it.wrongCount > 0 && it.level < LEVEL_EXPERT }
-            .sortedByDescending { it.wrongCount }
+            .sortedWith(compareByDescending<WordState> { it.wrongCount }.thenBy { it.wordId })
             .map { it.wordId }
             .take(limit)
-        return wordDb.wordsByIds(ids)
+        val byId = wordDb.wordsByIds(ids).associateBy { it.id }
+        return ids.mapNotNull { byId[it] }
     }
 
     // ---------------- 闯关 ----------------
