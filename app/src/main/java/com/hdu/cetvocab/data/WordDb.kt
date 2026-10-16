@@ -1,7 +1,11 @@
 package com.hdu.cetvocab.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteDatabaseCorruptException
+import android.database.sqlite.SQLiteDiskIOException
+import android.database.sqlite.SQLiteException
 import java.io.File
 import java.io.FileOutputStream
 
@@ -14,6 +18,73 @@ class WordDb(private val context: Context) {
 
     @Volatile
     private var db: SQLiteDatabase? = null
+
+    /**
+     * 词库可用性。之所以要把它做成一个状态而不是「抛出去就算了」：
+     * 首页 / 词库 / 闯关都只读词库，坏了以后界面显示的是「词库尚未就绪」，
+     * 用户会反复重启应用，而正确动作是重新安装 —— 这句话必须由某处说出来。
+     */
+    @Volatile
+    var status: WordbookStatus = WordbookStatus.OK
+        private set
+
+    /** 词库副本损坏且重拷也失败：需要重新安装，不是「稍后再试」 */
+    class WordbookUnreadableException(cause: Throwable?) :
+        Exception("内置词库无法读取", cause)
+
+    /**
+     * 词库指纹：分级词数 + 一个廉价的内容摘要。
+     *
+     * 备份 JSON 里带上它，恢复时才能判断「这份备份是不是给当前这版词库做的」。
+     * 摘要用几条聚合值而不是逐行哈希：词库 1.1 万行，备份是用户点了就要看到结果的动作，
+     * 不该为了算指纹全表扫一遍；而「词数 + id 之和 + 词长之和 + 释义长度之和」
+     * 已经能区分开任何一次实质性的词表变更（增删词、改释义都会动到至少一项）。
+     */
+    data class WordbookFingerprint(
+        val cet4: Int,
+        val cet6: Int,
+        val total: Int,
+        val digest: String
+    ) {
+        /** 与另一份指纹是否指向同一版词库；对方为 null（老备份没写）时按「未知」处理 */
+        fun matches(other: WordbookFingerprint?): Boolean {
+            if (other == null) return false
+            return cet4 == other.cet4 && cet6 == other.cet6 &&
+                total == other.total && digest == other.digest
+        }
+
+        fun describe(): String = "四级${cet4}词/六级${cet6}词"
+    }
+
+    /**
+     * 当前词库的指纹；词库读不出来时返回 null。
+     *
+     * 这里不抛异常：调用方是「导出备份」和「恢复备份」，它们跑在协程里，
+     * 词库损坏时应该导出一份「没有指纹」的备份（恢复时退化成不做校验），
+     * 而不是让用户连自己的学习记录都备份不出去。
+     */
+    fun fingerprintOrNull(): WordbookFingerprint? = reading(null) { d ->
+        var cet4 = 0
+        var cet6 = 0
+        var total = 0
+        var sumId = 0L
+        var sumWord = 0L
+        var sumTrans = 0L
+        d.rawQuery(
+            "SELECT COUNT(*), SUM(id), SUM(LENGTH(word)), SUM(LENGTH(translation)), " +
+                "SUM(CASE WHEN stage=? THEN 1 ELSE 0 END), SUM(CASE WHEN stage=? THEN 1 ELSE 0 END) " +
+                "FROM words",
+            arrayOf(STAGE_CET4.toString(), STAGE_CET6.toString())
+        ).use { c ->
+            if (c.moveToFirst()) {
+                total = c.getInt(0); sumId = c.getLong(1); sumWord = c.getLong(2)
+                sumTrans = c.getLong(3); cet4 = c.getInt(4); cet6 = c.getInt(5)
+            }
+        }
+        // 混合成 8 位十六进制：只要各项都相同就认为同一版词库
+        val mixed = (sumId * 31) xor (sumWord * 131) xor (sumTrans * 8191) xor total.toLong()
+        WordbookFingerprint(cet4, cet6, total, String.format("%08x", mixed))
+    }
 
     /** 首次打开的互斥锁，见 [open] 说明 */
     private val openLock = Any()
@@ -35,81 +106,162 @@ class WordDb(private val context: Context) {
             val out = File(context.filesDir, DB_NAME)
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val installed = prefs.getInt(PREFS_DB_VERSION_KEY, 0)
-            if (!out.exists() || installed != DB_VERSION) {
+            if (!out.exists() || installed != DB_VERSION) installCopy(out, prefs)
+            return try {
+                SQLiteDatabase.openDatabase(out.path, null, SQLiteDatabase.OPEN_READONLY)
+                    .also { db = it; status = WordbookStatus.OK }
+            } catch (e: Exception) {
                 /*
-                 * 拷贝必须是「写临时文件 → fsync → rename → 最后才写标记」。
-                 *
-                 * 旧写法是 `out.outputStream()` 直接覆写目标文件，写完立刻把标记置成
-                 * DB_VERSION 并 apply()。apply() 只是把数据排进磁盘队列，Android 的
-                 * 写回缓存意味着「标记已落盘、词库内容还没落盘」是真实可达的状态：
-                 * 首启拷到一半断电或被迫重启后，标记显示「已装好」，磁盘上却是半截
-                 * words.db，之后每次冷启动都判定不需要重装，首个查询就抛异常，
-                 * 而 viewModelScope 没有异常处理器 —— 结果是不可逆的无限闪退循环，
-                 * 用户只能去系统设置里清除数据。
-                 *
-                 * 现在：内容没 fsync 完就不 rename，没 rename 就不写标记。
-                 * 任何一步被打断，下次启动看到的仍是「标记 != 版本」，会自动重拷。
+                 * 打不开时唯一值得单独处理的情况：私有目录里那份**副本**坏了。
+                 * 原件在 assets 里、由安装包保证，副本删掉重拷就能恢复。
+                 * 关键是必须连 [PREFS_DB_VERSION_KEY] 一起清掉 —— 只删文件的话，
+                 * 标记仍写着「已装好」，下次冷启动判定不需要重拷，
+                 * 于是每次开 App 都在同一个异常上崩，用户只能去系统设置里清数据。
                  */
-                val tmp = File(context.filesDir, "$DB_NAME.tmp")
-                context.assets.open(DB_NAME).use { input ->
-                    FileOutputStream(tmp).use { output ->
-                        input.copyTo(output, 128 * 1024)
-                        output.flush()
-                        output.fd.sync()
-                    }
+                val recoverable = e is SQLiteDatabaseCorruptException ||
+                    e is SQLiteDiskIOException ||
+                    (e is SQLiteException &&
+                        e.message?.contains("not a database", true) == true)
+                if (!recoverable) throw WordbookUnreadableException(e)
+                forceReinstall()
+                val again = runCatching {
+                    installCopy(out, prefs)
+                    SQLiteDatabase.openDatabase(out.path, null, SQLiteDatabase.OPEN_READONLY)
                 }
-                if (!tmp.renameTo(out)) {
-                    // rename 失败（极少数文件系统的跨设备情况）时退回原地重写，
-                    // 但仍以「先拷完再写标记」为不变式，不改变判定顺序
-                    context.assets.open(DB_NAME).use { input ->
-                        FileOutputStream(out).use { output ->
-                            input.copyTo(output, 128 * 1024)
-                            output.flush()
-                            output.fd.sync()
-                        }
-                    }
+                // 重拷也失败（assets 原件本身有问题 / 存储写不进去）：
+                // 这才是真正需要「重新安装」的场景，抛带类型让 UI 给准确文案
+                again.getOrNull()?.let {
+                    db = it
+                    status = WordbookStatus.RECOVERED
+                    return it
                 }
-                tmp.delete()
-                prefs.edit().putInt(PREFS_DB_VERSION_KEY, DB_VERSION).commit()
+                throw WordbookUnreadableException(again.exceptionOrNull() ?: e)
             }
-            SQLiteDatabase.openDatabase(out.path, null, SQLiteDatabase.OPEN_READONLY)
-                .also { db = it }
         }
     }
 
-    private fun queryWords(selection: String, args: Array<String>?, orderBy: String?): List<Word> {
-        val list = ArrayList<Word>()
-        open().rawQuery(
-            "SELECT id,word,phonetic,translation,trans_detail,definition,pos,stage,unit,rank," +
-                "sentence,sentence_cn,roots,similar,mnemonic FROM words " +
-                "WHERE $selection " + (orderBy?.let { "ORDER BY $it" } ?: ""),
-            args
-        ).use { c ->
-            while (c.moveToNext()) {
-                list.add(
-                    Word(
-                        id = c.getInt(0),
-                        word = c.getString(1) ?: "",
-                        phonetic = c.getString(2) ?: "",
-                        translation = c.getString(3) ?: "",
-                        transDetail = c.getString(4) ?: "",
-                        definition = c.getString(5) ?: "",
-                        pos = c.getString(6) ?: "",
-                        stage = c.getInt(7),
-                        unit = c.getInt(8),
-                        rank = c.getInt(9),
-                        sentence = c.getString(10) ?: "",
-                        sentenceCn = c.getString(11) ?: "",
-                        roots = c.getString(12) ?: "",
-                        similar = c.getString(13) ?: "",
-                        mnemonic = c.getString(14) ?: ""
+    /**
+     * 丢弃当前连接与私有目录里那份副本，并清掉安装标记，
+     * 使下一次 [open] 必然走重拷。
+     *
+     * 必须在标记上也动手：只关连接不删标记的话，[open] 看到标记仍是当前版本，
+     * 会直接把同一份坏文件再打开一次，损坏状态永远出不去。
+     */
+    private fun forceReinstall() {
+        runCatching { db?.close() }
+        db = null
+        runCatching { File(context.filesDir, DB_NAME).delete() }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().remove(PREFS_DB_VERSION_KEY).commit()
+    }
+
+    /**
+     * 词库读取的统一入口：任何一次读失败都**降级返回 [fallback]**，
+     * 同时把 [status] 标成 [WordbookStatus.CORRUPT]，由界面层负责说出来。
+     *
+     * 为什么不能直接往外抛：这些查询的调用方全部跑在 `viewModelScope` 里，
+     * 而 viewModelScope 没配 CoroutineExceptionHandler —— 未捕获异常会直接
+     * 结束协程并让应用崩溃（首页刷新路径上就是「一点图标就闪退」），
+     * 用户既看不到原因也没有重试按钮。降级 + 状态位是把崩溃换成一句人话
+     * （「请重新安装本应用」）的唯一办法，且学习记录在另一个库里并不会丢。
+     *
+     * 还有第二种损坏：连接能正常打开、读到一半才报 malformed。此时
+     * [open] 里的 `db?.let` 会把这个坏连接一直复用下去，所以必须主动
+     * [forceReinstall] 再试一次，而不是原样抛出。
+     */
+    private fun <T> reading(fallback: T, block: (SQLiteDatabase) -> T): T =
+        try {
+            block(open())
+        } catch (e: WordbookUnreadableException) {
+            status = WordbookStatus.CORRUPT
+            fallback
+        } catch (e: Exception) {
+            val corrupt = e is SQLiteDatabaseCorruptException ||
+                e is SQLiteDiskIOException ||
+                (e is SQLiteException && e.message?.contains("malformed", true) == true)
+            if (!corrupt) throw e
+            forceReinstall()
+            try {
+                block(open())
+            } catch (again: WordbookUnreadableException) {
+                status = WordbookStatus.CORRUPT
+                fallback
+            }
+        }
+
+    /**
+     * 把 assets 里的词库原子地装到私有目录。
+     *
+     * 拷贝必须是「写临时文件 → fsync → rename → 最后才写标记」。
+     *
+     * 旧写法是 `out.outputStream()` 直接覆写目标文件，写完立刻把标记置成
+     * DB_VERSION 并 apply()。apply() 只是把数据排进磁盘队列，Android 的
+     * 写回缓存意味着「标记已落盘、词库内容还没落盘」是真实可达的状态：
+     * 首启拷到一半断电或被迫重启后，标记显示「已装好」，磁盘上却是半截
+     * words.db，之后每次冷启动都判定不需要重装，首个查询就抛异常，
+     * 而 viewModelScope 没有异常处理器 —— 结果是不可逆的无限闪退循环，
+     * 用户只能去系统设置里清除数据。
+     *
+     * 现在：内容没 fsync 完就不 rename，没 rename 就不写标记。
+     * 任何一步被打断，下次启动看到的仍是「标记 != 版本」，会自动重拷。
+     */
+    private fun installCopy(out: File, prefs: SharedPreferences) {
+        val tmp = File(context.filesDir, "$DB_NAME.tmp")
+        context.assets.open(DB_NAME).use { input ->
+            FileOutputStream(tmp).use { output ->
+                input.copyTo(output, 128 * 1024)
+                output.flush()
+                output.fd.sync()
+            }
+        }
+        if (!tmp.renameTo(out)) {
+            // rename 失败（极少数文件系统的跨设备情况）时退回原地重写，
+            // 但仍以「先拷完再写标记」为不变式，不改变判定顺序
+            context.assets.open(DB_NAME).use { input ->
+                FileOutputStream(out).use { output ->
+                    input.copyTo(output, 128 * 1024)
+                    output.flush()
+                    output.fd.sync()
+                }
+            }
+        }
+        tmp.delete()
+        prefs.edit().putInt(PREFS_DB_VERSION_KEY, DB_VERSION).commit()
+    }
+
+    private fun queryWords(selection: String, args: Array<String>?, orderBy: String?): List<Word> =
+        reading(emptyList()) { d ->
+            val list = ArrayList<Word>()
+            d.rawQuery(
+                "SELECT id,word,phonetic,translation,trans_detail,definition,pos,stage,unit,rank," +
+                    "sentence,sentence_cn,roots,similar,mnemonic FROM words " +
+                    "WHERE $selection " + (orderBy?.let { "ORDER BY $it" } ?: ""),
+                args
+            ).use { c ->
+                while (c.moveToNext()) {
+                    list.add(
+                        Word(
+                            id = c.getInt(0),
+                            word = c.getString(1) ?: "",
+                            phonetic = c.getString(2) ?: "",
+                            translation = c.getString(3) ?: "",
+                            transDetail = c.getString(4) ?: "",
+                            definition = c.getString(5) ?: "",
+                            pos = c.getString(6) ?: "",
+                            stage = c.getInt(7),
+                            unit = c.getInt(8),
+                            rank = c.getInt(9),
+                            sentence = c.getString(10) ?: "",
+                            sentenceCn = c.getString(11) ?: "",
+                            roots = c.getString(12) ?: "",
+                            similar = c.getString(13) ?: "",
+                            mnemonic = c.getString(14) ?: ""
+                        )
                     )
-                )
+                }
             }
+            list
         }
-        return list
-    }
-
     fun wordsOfUnit(stage: Int, unit: Int): List<Word> =
         queryWords("stage=? AND unit=?", arrayOf(stage.toString(), unit.toString()), "\"rank\"")
 
@@ -159,27 +311,33 @@ class WordDb(private val context: Context) {
         }
     }
 
-    fun countOfStage(stage: Int): Int =
-        open().rawQuery("SELECT COUNT(*) FROM words WHERE stage=?", arrayOf(stage.toString())).use {
-            if (it.moveToFirst()) it.getInt(0) else 0
-        }
+    /**
+     * 词库某一级别的词数。读不出来时返回 0 并置 CORRUPT —— 返回 0 是可接受的降级
+     * （首页与进度条会显示「本级 0 词」），抛出则整个刷新协程直接崩。
+     */
+    fun countOfStage(stage: Int): Int = reading(0) { d ->
+        d.rawQuery("SELECT COUNT(*) FROM words WHERE stage=?", arrayOf(stage.toString()))
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    }
 
     /**
      * 某一级别的全部词 id。
      * 用于按「级别」统计学习进度——学习记录在 user_data.db、词表在 words.db，
      * 是两个独立的 SQLite 库没法 JOIN，只能先取出本级 id 再与学习记录求交集。
      */
-    fun idsOfStage(stage: Int): List<Int> =
-        open().rawQuery("SELECT id FROM words WHERE stage=?", arrayOf(stage.toString())).use { c ->
+    fun idsOfStage(stage: Int): List<Int> = reading(emptyList()) { d ->
+        d.rawQuery("SELECT id FROM words WHERE stage=?", arrayOf(stage.toString())).use { c ->
             val ids = ArrayList<Int>(c.count)
             while (c.moveToNext()) ids.add(c.getInt(0))
             ids
         }
+    }
 
-    fun unitCount(stage: Int): Int =
-        open().rawQuery(
+    fun unitCount(stage: Int): Int = reading(0) { d ->
+        d.rawQuery(
             "SELECT COUNT(DISTINCT unit) FROM words WHERE stage=?", arrayOf(stage.toString())
         ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    }
 
     /**
      * 「同一个单词」的代表 id：同一 word 文本在词库里可能有两行
@@ -207,26 +365,28 @@ class WordDb(private val context: Context) {
 
     private fun canonicalMap(): Map<Int, Int> {
         canonicalIds?.let { return it }
-        return synchronized(openLock) {
-            canonicalIds ?: run {
-                val minIdOfWord = HashMap<String, Int>(7000)
-                open().rawQuery("SELECT word, MIN(id) FROM words GROUP BY word", null).use { c ->
-                    while (c.moveToNext()) {
-                        val w = c.getString(0) ?: continue
-                        minIdOfWord[w] = c.getInt(1)
-                    }
+        // 词库不可用时返回空表：distinctWordCount 于是退化成「按 id 计数」。
+        // 这里不能缓存失败结果 —— 否则本轮会话后续都拿不到去重映射。
+        val built = reading<Map<Int, Int>?>(null) { d ->
+            val minIdOfWord = HashMap<String, Int>(7000)
+            d.rawQuery("SELECT word, MIN(id) FROM words GROUP BY word", null).use { c ->
+                while (c.moveToNext()) {
+                    val w = c.getString(0) ?: continue
+                    minIdOfWord[w] = c.getInt(1)
                 }
-                val map = HashMap<Int, Int>(12000)
-                open().rawQuery("SELECT id, word FROM words", null).use { c ->
-                    while (c.moveToNext()) {
-                        val w = c.getString(1) ?: continue
-                        map[c.getInt(0)] = minIdOfWord[w] ?: c.getInt(0)
-                    }
-                }
-                minIdOfWord.clear()
-                map.also { canonicalIds = it }
             }
-        }
+            val map = HashMap<Int, Int>(12000)
+            d.rawQuery("SELECT id, word FROM words", null).use { c ->
+                while (c.moveToNext()) {
+                    val w = c.getString(1) ?: continue
+                    map[c.getInt(0)] = minIdOfWord[w] ?: c.getInt(0)
+                }
+            }
+            minIdOfWord.clear()
+            map
+        } ?: return emptyMap()
+        synchronized(openLock) { canonicalIds = built }
+        return built
     }
 
     /**
@@ -263,10 +423,10 @@ class WordDb(private val context: Context) {
      * 没有 try/catch，一旦触发就是 IO 协程里的未捕获异常），
      * 由闯关页给出「题库暂不可用」的提示，而不是让整个 App 崩掉。
      */
-    fun translationItems(stage: Int): List<TranslationItem> {
+    fun translationItems(stage: Int): List<TranslationItem> = reading(emptyList()) { d ->
         val list = ArrayList<TranslationItem>()
-        runCatching {
-            open().rawQuery(
+        val failure = runCatching {
+            d.rawQuery(
                 "SELECT id,stage,keyword,chinese,opt_a,opt_b,opt_c,opt_d,correct,analysis " +
                     "FROM translation_quiz WHERE stage=? ORDER BY id",
                 arrayOf(stage.toString())
@@ -296,8 +456,15 @@ class WordDb(private val context: Context) {
                     )
                 }
             }
+        }.exceptionOrNull()
+        if (failure != null) {
+            // 只有「这张表在当前词库副本里不存在」才降级成空列表（旧版本副本的正常状态），
+            // 其余异常（文件损坏、磁盘 IO）必须原样抛出去，让 UI 说出正确动作
+            val missingTable = failure is SQLiteException &&
+                failure.message?.contains("no such table", true) == true
+            if (!missingTable) throw failure
         }
-        return list
+        list
     }
 
     companion object {
@@ -343,4 +510,16 @@ class WordDb(private val context: Context) {
 
         fun stageLabel(stage: Int) = if (stage == STAGE_CET6) "六级" else "四级"
     }
+}
+
+/** 词库可用性，见 [WordDb.status] */
+enum class WordbookStatus {
+    /** 正常 */
+    OK,
+
+    /** 私有目录里的副本损坏，已自动重拷并恢复成功（本轮仅用于诊断，不改变行为） */
+    RECOVERED,
+
+    /** 重拷也失败，需要重新安装应用 */
+    CORRUPT
 }

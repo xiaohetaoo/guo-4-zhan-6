@@ -74,6 +74,7 @@ import com.hdu.cetvocab.ui.theme.LocalAppColors
 import com.hdu.cetvocab.ui.theme.Motion
 import com.hdu.cetvocab.ui.theme.springPress
 import kotlin.math.abs
+import com.hdu.cetvocab.ui.components.HitArea
 
 @Composable
 fun StudyScreen(
@@ -130,29 +131,32 @@ fun StudyScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         // ---------- 顶部进度 ----------
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        // 关闭键热区从 34 撑到 44（K13），上下内边距从 12 收到 7 等量吸收，
+        // 这一栏仍是 58dp；芯片贴行首（CenterStart）+ 间距 12→2，标题位置不变。
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .springPress(closeInteraction, pressedScale = 0.88f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable(
-                            interactionSource = closeInteraction,
-                            indication = null,
-                            role = Role.Button,
-                            onClick = onFinish
-                        )
-                        .semantics { contentDescription = closeLabel },
-                    contentAlignment = Alignment.Center
+                HitArea(
+                    onClick = onFinish,
+                    interaction = closeInteraction,
+                    min = 44.dp,
+                    align = Alignment.CenterStart,
+                    contentDescription = closeLabel
                 ) {
-                    IconClose(
-                        modifier = Modifier.size(15.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .springPress(closeInteraction, pressedScale = 0.88f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconClose(
+                            modifier = Modifier.size(15.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(2.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = state.title,
@@ -338,29 +342,34 @@ private fun CardFront(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Tag(text = "${com.hdu.cetvocab.data.WordDb.stageLabel(word.stage)}、第${word.unit}单元")
             Spacer(Modifier.weight(1f))
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .springPress(favInteraction, pressedScale = 0.86f)
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(
-                        if (fav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant
-                    )
-                    .clickable(
-                        interactionSource = favInteraction,
-                        indication = null,
-                        role = Role.Button,
-                        onClick = { vm.toggleFavCurrent() }
-                    )
-                    .semantics { contentDescription = favLabel },
-                contentAlignment = Alignment.Center
+            // 收藏芯片 38dp 太小（K13）。热区补到 44dp、贴右对齐，
+            // 芯片仍停在卡片右缘；这一行上面有 weight(1f) 的弹性空隙，
+            // 多出的 6dp 由它吸收，卡片里其它内容不动。
+            HitArea(
+                onClick = { vm.toggleFavCurrent() },
+                interaction = favInteraction,
+                min = 44.dp,
+                align = Alignment.CenterEnd,
+                contentDescription = favLabel
             ) {
-                IconHeart(
-                    modifier = Modifier.size(19.dp),
-                    filled = fav,
-                    color = if (fav) LocalAppColors.current.warning
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .springPress(favInteraction, pressedScale = 0.86f)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(
+                            if (fav) LocalAppColors.current.cardAmber
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    IconHeart(
+                        modifier = Modifier.size(19.dp),
+                        filled = fav,
+                        color = if (fav) LocalAppColors.current.warning
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
         Spacer(Modifier.weight(1f))

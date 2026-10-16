@@ -147,6 +147,25 @@ class BackupManager(
         root.put(KEY_APP, APP_ID)
         root.put("db_version", UserDb.DB_VERSION)
         root.put("exported_at", System.currentTimeMillis())
+        /*
+         * 记下这份备份是对着哪一版词库做的。
+         *
+         * 词库随版本重排过（新增词条会让 unit / rank 整体位移，word_id 也会变），
+         * 而 word_state、study_log 存的都是 word_id。恢复旧备份时那些 id 可能指向
+         * 另一个单词，也可能根本不存在。不存在的那部分 restore 会跳过并如实报数，
+         * 但**指向另一个单词**的记录是「恢复成功、内容悄悄错位」——
+         * 用户看不出任何异常，只会发现某些词莫名其妙学过或答错过。
+         * 有指纹才能在恢复前把这件事说出来。词库读不出来时不写这一段，
+         * 恢复时按「未知」放行（见 restore 的注释）。
+         */
+        wordDb.fingerprintOrNull()?.let { fp ->
+            root.put("wordbook", JSONObject().apply {
+                put("cet4", fp.cet4)
+                put("cet6", fp.cet6)
+                put("total", fp.total)
+                put("digest", fp.digest)
+            })
+        }
 
         root.put(
             "word_state",
@@ -270,6 +289,15 @@ class BackupManager(
         val skipped: Int
     )
 
+    /** 备份与当前词库不是同一版；界面据此让用户确认后再继续 */
+    class WordbookMismatchException(
+        val backupText: String,
+        val currentText: String
+    ) : Exception(
+        "这份备份记录的是另一版词库（备份：$backupText；本机：$currentText）。" +
+            "恢复时词号可能对不上，学习进度会出现缺口。"
+    )
+
     /**
      * 用指定备份覆盖当前全部学习数据。
      *
@@ -278,7 +306,7 @@ class BackupManager(
      * 历史实现是先 `readText()` 再进事务删表，虽然事务能回滚，
      * 但缺少版本与有效性校验，会把一批指向不存在单词的记录写进来。
      */
-    fun restore(file: File): RestoreReport {
+    fun restore(file: File, allowWordbookMismatch: Boolean = false): RestoreReport {
         val root = JSONObject(file.readText())
 
         // ---------- 1. 校验：不通过则直接抛出，此时一行数据都还没删 ----------
@@ -347,6 +375,30 @@ class BackupManager(
         require(backupVersion <= UserDb.DB_VERSION) {
             "这份备份的数据格式版本（v${backupVersion}）比当前应用支持的（v${UserDb.DB_VERSION}）更新，" +
                 "请先升级「过四斩六」再恢复"
+        }
+        /*
+         * 词库指纹校验。放在这里（还没删任何数据）是刻意的：
+         * 它是一次「要问用户」的软失败，不是一条错误。
+         *
+         * 三种情况放行：
+         * ① 备份里没有 wordbook 段 —— v1.4.5 之前的老备份本来就不带指纹，
+         *    它们仍然要能恢复，不能因为「我们后来才加的字段」被拒之门外；
+         * ② 本机词库读不出来（[WordDb.fingerprintOrNull] 返回 null）——
+         *    此时后续按 validIds 过滤会大量跳过，那已经是另一条更硬的保护；
+         * ③ 用户看过差异说明后点了「仍要恢复」。
+         */
+        val backupWordbook = root.optJSONObject("wordbook")
+        if (backupWordbook != null && !allowWordbookMismatch) {
+            val current = wordDb.fingerprintOrNull()
+            val backup = WordDb.WordbookFingerprint(
+                cet4 = backupWordbook.optInt("cet4"),
+                cet6 = backupWordbook.optInt("cet6"),
+                total = backupWordbook.optInt("total"),
+                digest = backupWordbook.optString("digest")
+            )
+            if (current != null && !current.matches(backup)) {
+                throw WordbookMismatchException(backup.describe(), current.describe())
+            }
         }
 
         // 词库随版本更新，旧备份里的 word_id 可能已不存在于当前词库。

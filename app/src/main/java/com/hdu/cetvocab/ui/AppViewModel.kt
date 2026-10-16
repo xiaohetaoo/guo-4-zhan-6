@@ -191,6 +191,14 @@ data class ProfileUiState(
     val speechRate: Float = 0.92f,
     val stage: Int = WordDb.STAGE_CET4,
     val iconStyle: Int = LauncherIcons.STYLE_DEFAULT,
+    /**
+     * 桌面此刻**实际**在用的图标风格；读不出来时为 null。
+     *
+     * 与 [iconStyle]（用户的选择）分开存：图标要到 onStop 才落地，
+     * 而且个别设备的桌面根本不允许应用换图标。设置页原来按 [iconStyle]
+     * 写「当前桌面显示」，切换失败时那句话就是假的。
+     */
+    val desktopIconStyle: Int? = null,
     val themeMode: Int = VocabRepository.THEME_SYSTEM,
     /** 界面动效开关（设置页）。false 时转场、弹簧与按压回弹全部退化为瞬间落位。 */
     val animationsEnabled: Boolean = true,
@@ -341,6 +349,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 供非 ViewModel 持有者（如 AppRoot 里的发音回调）触发一次提示 */
     fun toast(msg: String) = notify(msg)
 
+    /**
+     * 词库损坏的提示只说一次。
+     *
+     * 这个状态不会因为「用户又刷了一次首页」而自愈，每次刷新都弹就变成骚扰；
+     * 而且刷新入口有四个（冷启动、切级别、答完一题、返回前台），
+     * 不做去重的话用户可能在几秒内看到四条一模一样的提示。
+     */
+    private var wordbookReported = false
+
+    private fun reportWordbook() {
+        if (wordbookReported) return
+        val problem = repo.wordbookProblem ?: return
+        wordbookReported = true
+        notify(problem)
+    }
+
     // ---------- 首页 ----------
 
     fun refreshHome() {
@@ -371,6 +395,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             _home.value = data
+            reportWordbook()
         }
     }
 
@@ -396,12 +421,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 用户回到桌面时新图标已经就绪，切换过程无感。
      */
     fun setIconStyle(style: Int) {
+        val want = LauncherIcons.targetAlias(style, repo.stage)
+        /*
+         * 先探一次目标入口在这台设备上存不存在，再决定承诺什么。
+         *
+         * 图标不是在点击时写系统、而是在 onStop 落地（见 MainActivity），
+         * 所以这里没法当场知道成败。但有一类失败是**点击时就能确定的**：
+         * ROM 裁掉了 activity-alias，或用户在系统设置里禁用了某个入口 ——
+         * 这种设备上写入必定失败，而原来的文案照样说「回到桌面即可看到」，
+         * 用户回到桌面发现图标没变，只会以为功能坏了。
+         * 探测不到就不改偏好、不承诺，直接说清原因。
+         */
+        if (!LauncherIcons.isAvailable(getApplication(), want)) {
+            notify("这台设备的桌面不允许本应用切换图标，已保留原来的图标")
+            return
+        }
         repo.iconStyle = style
         _profile.update { it.copy(iconStyle = style) }
         notify(
             if (style == LauncherIcons.STYLE_SIMPLE) "已选择简洁图标，回到桌面即可看到"
             else "已切回默认图标"
         )
+        // 选完立刻重读一次系统状态：设置页那句「当前桌面显示」讲的是实际图标，
+        // 不是用户刚点的那一项（见 ProfileUiState.desktopIconStyle）。
+        refreshProfile()
+    }
+
+    /**
+     * onStop 落地图标时写入失败的待播报提醒。
+     *
+     * 失败发生在应用已经退到后台之后，此刻弹 Snackbar 用户看不见，
+     * 等下一次回到前台再补这一句（[onAppForeground]）。
+     */
+    private var pendingIconNotice: String? = null
+
+    fun onIconApplyFailed() {
+        pendingIconNotice = "桌面图标没能切换，已保留原来的图标"
     }
 
     /** 切换明暗模式：跟随系统 / 始终浅色 / 始终深色。 */
@@ -853,6 +908,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (quizScreenActive && _quiz.value.active && !_quiz.value.finished && questionStartTs <= 0) {
             questionStartTs = System.currentTimeMillis()
         }
+        // 补播后台期间发生、当时说不出口的失败（见 [onIconApplyFailed]）
+        pendingIconNotice?.let {
+            pendingIconNotice = null
+            notify(it)
+            refreshProfile()
+        }
     }
 
     /**
@@ -944,6 +1005,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         finishJob?.cancel()
         finishJob = null
         finishing = false
+        // 开新局前先把「答到一半的那一局」挪个地方存着，别让它无声消失
+        preserveInterruptedSession()
         // 每开一局换一个新的会话号：上一局尚未写完的结算结果据此作废
         quizSession++
         _quiz.value = QuizUiState(
@@ -957,6 +1020,48 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         quizSpec = spec
         saveQuizSnapshot()
         onReady(true)
+    }
+
+    /**
+     * 开新局前保留被打断的上一局。
+     *
+     * 只有一个快照键，新局一写就把旧局盖掉：用户答了 8 题、退出后选了另一关，
+     * 那 8 题既没有成绩也没有快照，等于凭空蒸发 —— 界面上一个字都没提。
+     * 这里在覆盖前把它转存到 [VocabRepository.quizInterruptedSnapshot]，
+     * 并在本局结束/退出后由 [clearQuizSnapshot] 取回，让用户仍然有机会打完它。
+     *
+     * 两种「被打断」都要保：
+     * ① 内存里正在进行、且至少答过一题的那一局（从结算页「再来一局」之外的入口开新局）；
+     * ② 进程被系统回收后留下的那份快照 —— 它不在内存态里（[QuizUiState.active] 是 false），
+     *    却是选关页「有一局没打完」卡片指向的那一局。只挡 ① 的话，
+     *    最常见的「杀进程 → 重开 → 直接点另一关」仍然会把旧局盖掉。
+     *
+     * 不保留的情况：一题没答（index==0，丢了不亏，留着只会让用户对着「第1题继续」发懵）、
+     * 已超过 30 分钟可恢复窗口（peekRestorableQuiz 本来就要丢弃它）、
+     * 已进结算页（finished，成绩已经落库）。
+     */
+    private fun preserveInterruptedSession() {
+        val s = _quiz.value
+        val live = s.active && !s.finished && s.index > 0
+        if (!live && !snapshotHasProgress()) return
+        // 内存态那一题刚落盘时 saveQuizSnapshot 会把最新进度写进快照；
+        // 只有①需要这一步，②的快照本来就已经在 prefs 里。
+        if (live) saveQuizSnapshot()
+        repo.quizInterruptedSnapshot = repo.quizSessionSnapshot
+        _quizSnapshotEpoch.update { it + 1 }
+        notify(
+            if (live) "上一局第${s.index}题前的进度已保留，本局结束后可继续"
+            else "之前没打完的那一局已保留，本局结束后可继续"
+        )
+    }
+
+    /** prefs 里那份快照是不是「答过题、且还在可恢复窗口内」的旧局（见 [preserveInterruptedSession] ②） */
+    private fun snapshotHasProgress(): Boolean {
+        val raw = repo.quizSessionSnapshot ?: return false
+        val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return false
+        if (obj.optInt("index", 0) <= 0) return false
+        val ts = obj.optLong("ts", 0L)
+        return ts > 0L && System.currentTimeMillis() - ts <= RESTORE_WINDOW_MS
     }
 
     /**
@@ -996,7 +1101,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun clearQuizSnapshot() {
         quizSpec = null
-        repo.quizSessionSnapshot = null
+        /*
+         * 本局结束后，把「被它挤掉的那一局」放回快照位。
+         * 放回来的时机只有这一处：结算页关闭与答题页退出都会走到这里，
+         * 而用户此刻已经不再需要本局的快照，选关页那张「有一局没打完」的卡片
+         * 正好换成更早的那一局。超过 30 分钟窗口则由 peekRestorableQuiz 自己丢弃。
+         */
+        repo.quizSessionSnapshot = repo.quizInterruptedSnapshot
+        repo.quizInterruptedSnapshot = null
         _quizSnapshotEpoch.update { it + 1 }
     }
 
@@ -1587,13 +1699,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 结果通过 [notify]（全局 Snackbar）反馈，而不是由页面弹对话框：
      * 恢复可能要跑几秒，用户很可能已经离开设置页，页面级提示会永远不出现。
      * 全局提示挂在 AppRoot 上，无论用户在哪一页都能看到。
+     *
+     * [allowWordbookMismatch] 只由「词库版本不一致」确认框点「仍要恢复」时传 true。
      */
-    fun restoreBackup(file: File) {
+    fun restoreBackup(file: File, allowWordbookMismatch: Boolean = false) {
         if (_fileBusy.value) return
         _fileBusy.value = true
         viewModelScope.launch {
             try {
-                runCatching { withContext(Dispatchers.IO) { backup.restore(file) } }
+                runCatching {
+                    withContext(Dispatchers.IO) { backup.restore(file, allowWordbookMismatch) }
+                }
                     .onSuccess { report ->
                         // 备份里带着级别 / 目标 / 语速 / 各开关，恢复成功后 _profile
                         // 必须整体换成备份那份，不能让合并逻辑把 old 的当前设置留下。
@@ -1605,11 +1721,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         )
                     }
-                    .onFailure { _fileError.value = fileErrorMessage("没能恢复数据", it) }
+                    .onFailure {
+                        /*
+                         * 「备份来自另一版词库」不是错误，是一次需要用户拍板的风险提示：
+                         * 旧备份确实可能只有这一份，直接拒掉等于把用户的进度锁死在外面。
+                         * 所以它不走 [_fileError]（那是一条红字，用户只会照着改备份），
+                         * 而是放进 [_wordbookMismatch]，由设置页弹确认框、给出「仍要恢复」。
+                         */
+                        if (it is BackupManager.WordbookMismatchException) {
+                            _wordbookMismatch.value = MismatchPrompt(file, it.message ?: "")
+                        } else {
+                            _fileError.value = fileErrorMessage("没能恢复数据", it)
+                        }
+                    }
             } finally {
                 _fileBusy.value = false
             }
         }
+    }
+
+    /** 词库不一致时待确认的备份。直接持有文件，避免恢复期间目录被新备份挤掉后按名字找错文件 */
+    data class MismatchPrompt(val file: File, val detail: String)
+
+    private val _wordbookMismatch = MutableStateFlow<MismatchPrompt?>(null)
+    val wordbookMismatch: StateFlow<MismatchPrompt?> = _wordbookMismatch.asStateFlow()
+
+    fun dismissWordbookMismatch() {
+        _wordbookMismatch.value = null
+    }
+
+    /** 用户在确认框里点了「仍要恢复」 */
+    fun restoreIgnoringWordbookMismatch() {
+        val prompt = _wordbookMismatch.value ?: return
+        _wordbookMismatch.value = null
+        restoreBackup(prompt.file, allowWordbookMismatch = true)
     }
 
     // ---------- 我的 / 成就 / 排行榜 ----------
@@ -1628,6 +1773,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     speechRate = repo.speechRate,
                     stage = repo.stage,
                     iconStyle = repo.iconStyle,
+                    desktopIconStyle = LauncherIcons.appliedStyle(getApplication()),
                     themeMode = repo.themeMode,
                     animationsEnabled = repo.animationsEnabled,
                     soundEnabled = repo.soundEnabled,

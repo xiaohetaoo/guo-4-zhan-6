@@ -43,32 +43,38 @@ fun AppTopBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            // 左右仍是 16；上下从 12 收到 7：返回键的热区从 38 撑到 48（K13 无障碍项），
+            // 多出的 10dp 由这里等量吸收，整条顶栏的高度（7+48+7 = 12+38+12 = 62）一点没变。
+            .padding(horizontal = 16.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .springPress(interaction, pressedScale = 0.88f)
-                .clip(RoundedCornerShape(13.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable(
-                    interactionSource = interaction,
-                    indication = null,
-                    role = Role.Button,
-                    onClick = onBack
-                )
-                // 返回图标是 Canvas 自绘、没有内置语义，必须显式给出朗读文本，
-                // 否则 TalkBack 只会念出一个无名的「按钮」。
-                .semantics { contentDescription = backLabel },
-            contentAlignment = Alignment.Center
+        // 38dp 的返回芯片视觉上保持原样，只把命中区补到 48dp（见 HitArea 的说明）。
+        // 与芯片共用同一个 InteractionSource，按压缩放动画才不会丢。
+        // align=CenterStart：多出的 10dp 全部朝行内那一侧长，芯片左缘仍停在 16dp 边距上。
+        HitArea(
+            onClick = onBack,
+            interaction = interaction,
+            min = 48.dp,
+            align = Alignment.CenterStart,
+            contentDescription = backLabel
         ) {
-            IconBack(
-                modifier = Modifier.size(18.dp),
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .springPress(interaction, pressedScale = 0.88f)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                IconBack(
+                    modifier = Modifier.size(18.dp),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
-        Spacer(Modifier.width(12.dp))
+        // 原 12dp：热区比芯片宽的 10dp 已经吃掉了一部分间距，
+        // 补回来正好让标题停在原来的 x 上（16 + 48 + 2 == 16 + 38 + 12）
+        Spacer(Modifier.width(2.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,

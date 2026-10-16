@@ -26,7 +26,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,12 +47,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hdu.cetvocab.R
+import com.hdu.cetvocab.data.AchievementDef
 import com.hdu.cetvocab.data.Achievements
 import com.hdu.cetvocab.data.Tier
 import com.hdu.cetvocab.data.UNIT_QUIZ_COUNT
 import com.hdu.cetvocab.data.WordDb
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
+import com.hdu.cetvocab.ui.components.AchievementDetailDialog
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.IconChevronRight
 import com.hdu.cetvocab.ui.components.IconFlame
@@ -77,6 +81,8 @@ fun ProfileScreen(
     // 只数「当前版本定义过」的成就码：库里若混入未知 code（手改过的备份），
     // 直接取 size 会显示成「成就（100 / 81）」
     val unlockedCount = Achievements.ALL.count { state.unlocked.containsKey(it.code) }
+    // 卡片上那排徽章也能点开看详情，与成就墙用的是同一个弹层
+    var detail by remember { mutableStateOf<AchievementDef?>(null) }
 
     LazyColumn(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
@@ -224,7 +230,8 @@ fun ProfileScreen(
                         AchievementBadge(
                             def = def,
                             unlocked = state.unlocked.containsKey(def.code),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            onClick = { detail = def }
                         )
                     }
                 }
@@ -285,6 +292,14 @@ fun ProfileScreen(
                     .padding(horizontal = 12.dp, vertical = 2.dp)
             )
         }
+    }
+
+    detail?.let { def ->
+        AchievementDetailDialog(
+            def = def,
+            unlockedTs = state.unlocked[def.code],
+            onDismiss = { detail = null }
+        )
     }
 }
 

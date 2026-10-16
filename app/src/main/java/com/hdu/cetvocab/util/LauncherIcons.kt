@@ -27,6 +27,25 @@ object LauncherIcons {
     /** 图标风格：简洁（橙底白字，跟随级别显示「四」或「六」） */
     const val STYLE_SIMPLE = 1
 
+    /**
+     * [apply] 的结果。
+     *
+     * 早期 apply 返回的是 Boolean，含义是「有没有真的发生切换」——
+     * 于是「已经是目标图标、无需写入」和「写入失败」都返回 false，
+     * 调用方无法区分，只能把失败当正常、把正常当失败。
+     * 设置页要按失败给出准确反馈，就必须把这两种情况拆开。
+     */
+    enum class ApplyResult {
+        /** 本次写入让桌面图标变成了目标入口 */
+        APPLIED,
+
+        /** 系统状态本来就是对的，没有产生任何写入 */
+        UNCHANGED,
+
+        /** 写入失败或收尾后仍不是「恰好启用目标入口」 */
+        FAILED
+    }
+
     private const val DEFAULT = "com.hdu.cetvocab.LauncherDefault"
     private const val SI = "com.hdu.cetvocab.LauncherSimpleSi"
     private const val LIU = "com.hdu.cetvocab.LauncherSimpleLiu"
@@ -137,17 +156,19 @@ object LauncherIcons {
      * 最坏情况下三个入口同时处于禁用状态 —— 桌面图标消失，应用再也打不开。
      * 这是全局唯一的写入点，直接锁在单例上，代价可忽略。
      *
-     * @return true 表示确实发生了切换（桌面图标已改变）
+     * @return 见 [ApplyResult]：APPLIED 表示图标真的变了，
+     *         UNCHANGED 表示本来就是这样（没做任何写入），
+     *         FAILED 表示这台设备切不过去 —— 调用方必须据此收回「回到桌面即可看到」的承诺。
      */
     @Synchronized
-    fun apply(context: Context, style: Int, stage: Int): Boolean {
+    fun apply(context: Context, style: Int, stage: Int): ApplyResult {
         val want = targetAlias(style, stage)
         val before = ALL.associateWith { isEnabled(context, it) }
 
         // 第一步：先确保目标入口启用。失败则保持现状并收敛不变量后返回。
         if (!setEnabled(context, want, true)) {
             ensureExactlyOne(context)
-            return false
+            return ApplyResult.FAILED
         }
 
         // 第二步：再停用其余入口。单个失败不影响不变量，因为目标已启用。
@@ -155,8 +176,37 @@ object LauncherIcons {
 
         // 第三步：收尾自检，保证「恰好一个启用」。
         ensureExactlyOne(context)
-
         val after = ALL.associateWith { isEnabled(context, it) }
-        return before != after
+        // 自检通过还不够：必须确认「此刻生效的那个入口正是想要的」，
+        // 否则说明收尾把图标收敛回了默认入口（写入被 ROM 拒绝时的真实表现）。
+        if (currentAlias(context) != want) return ApplyResult.FAILED
+        return if (before == after) ApplyResult.UNCHANGED else ApplyResult.APPLIED
+    }
+
+    /**
+     * 目标入口在这台设备上是否真实存在。
+     *
+     * `activity-alias` 声明在包里，理论上一定在，但两种情况下拿不到：
+     * ROM 把未使用的组件裁掉，或用户在「应用管理」里手动禁用了某个 alias。
+     * 此时 [apply] 的每次写入都会失败，设置页就不该承诺「回到桌面即可看到」。
+     * 读组件状态本身就是跨进程调用，失败时抛 NameNotFoundException，这里收成 false。
+     */
+    fun isAvailable(context: Context, alias: String): Boolean =
+        runCatching {
+            context.packageManager.getComponentEnabledSetting(
+                ComponentName(context.packageName, alias)
+            )
+        }.isSuccess
+
+    /**
+     * 桌面**现在**用的是哪种图标；读不出来返回 null（不猜）。
+     *
+     * 设置页原本按「用户选了哪个」来写「当前桌面显示」，
+     * 于是切换失败时那句话是假的。这一句让用户自己核对系统状态。
+     */
+    fun appliedStyle(context: Context): Int? = when (currentAlias(context)) {
+        DEFAULT -> STYLE_DEFAULT
+        SI, LIU -> STYLE_SIMPLE
+        else -> null
     }
 }

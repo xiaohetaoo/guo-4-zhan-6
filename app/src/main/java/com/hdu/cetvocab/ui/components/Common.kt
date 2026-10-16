@@ -20,9 +20,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -47,6 +49,9 @@ import com.hdu.cetvocab.data.AchievementDef
 import com.hdu.cetvocab.data.DayStat
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 import com.hdu.cetvocab.ui.theme.springPress
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /** 统一的大圆角卡片 */
 @Composable
@@ -302,6 +307,99 @@ fun AchievementBadge(
             overflow = TextOverflow.Ellipsis
         )
     }
+}
+
+/**
+ * 成就详情弹层：点成就墙或「我的」页上的任意徽章弹出。
+ *
+ * 之所以需要它：成就墙是三列网格，每格只有约 94dp 宽，
+ * 「作答 200 题以上且正确率达到 98%」这类长说明被压成两行加省略号，
+ * 用户看得到徽章却看不到完整的达成条件，也看不到自己是什么时候解锁的。
+ * 这里给的是同一份数据的完整版：档位、完整条件、解锁时间（或「尚未解锁」）。
+ */
+@Composable
+fun AchievementDetailDialog(def: AchievementDef, unlockedTs: Long?, onDismiss: () -> Unit) {
+    val unlocked = unlockedTs != null
+    val tint = if (unlocked) tierColor(def.tier) else LocalAppColors.current.badgeLockedTint
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        icon = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (unlocked) tint.copy(alpha = 0.22f)
+                            else LocalAppColors.current.badgeLockedBg
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = glyphChar(def.glyph),
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (unlocked) tint else LocalAppColors.current.badgeLockedFg
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = when (def.tier) { 3 -> "金色成就" 2 -> "银色成就" else -> "铜色成就" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (unlocked) tint else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        title = {
+            Text(
+                text = def.title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "达成条件",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(2.dp))
+                // 这里不限行数：弹层的全部意义就是把网格里被省略号裁掉的那句说完整
+                Text(
+                    text = def.desc,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = if (unlocked) "解锁时间" else "当前状态",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = unlockedTs?.let { ts ->
+                        // 时间格式化失败（极端时钟值、ROM 缺时区数据）不该让弹层崩掉，
+                        // 退化成一句「已解锁」，状态本身还是对的
+                        runCatching {
+                            Instant.ofEpochMilli(ts)
+                                .atZone(ZoneId.systemDefault())
+                                .format(DateTimeFormatter.ofPattern("yyyy年MM月dd日 HH:mm"))
+                        }.getOrDefault("已解锁")
+                    } ?: "尚未解锁，达成后会自动记录在这里",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (unlocked) LocalAppColors.current.success
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("知道了") }
+        }
+    )
 }
 
 /**

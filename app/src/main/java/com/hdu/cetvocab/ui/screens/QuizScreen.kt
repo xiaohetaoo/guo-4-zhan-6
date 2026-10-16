@@ -99,6 +99,7 @@ import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 import com.hdu.cetvocab.ui.theme.Motion
 import com.hdu.cetvocab.ui.theme.springPress
+import com.hdu.cetvocab.ui.components.HitArea
 
 @Composable
 fun QuizScreen(
@@ -458,29 +459,35 @@ private fun QuizPlay(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        // 关闭键热区从 34 撑到 44（K13），上下内边距从 12 收到 7 等量吸收：
+        // 34+24 与 44+14 都是 58dp，这一栏的高度没有变化。
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .springPress(closeInteraction, pressedScale = 0.88f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable(
-                            interactionSource = closeInteraction,
-                            indication = null,
-                            role = Role.Button,
-                            onClick = onQuit
-                        )
-                        .semantics { contentDescription = closeLabel },
-                    contentAlignment = Alignment.Center
+                // 贴着行首的按钮一律 align=CenterStart：多出来的命中区只往右长，
+                // 芯片仍停在 16dp 边距上；下方的间距也从 12 收到 2，
+                // 于是 16+34+12 与 16+44+2 完全等宽，标题一个像素都不挪。
+                HitArea(
+                    onClick = onQuit,
+                    interaction = closeInteraction,
+                    min = 44.dp,
+                    align = Alignment.CenterStart,
+                    contentDescription = closeLabel
                 ) {
-                    IconClose(
-                        modifier = Modifier.size(15.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .springPress(closeInteraction, pressedScale = 0.88f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconClose(
+                            modifier = Modifier.size(15.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(2.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = quizScopeLabel(state.stage, state.unit),

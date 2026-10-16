@@ -220,6 +220,42 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         }
     }
 
+    /*
+     * 系统返回键的方向。
+     *
+     * swipeDir 原本只在 goTab 里赋值，而返回键走的是 NavController 内部的 pop，
+     * 根本不经过 goTab —— 于是它的值停在「上一次点标签」那一刻。
+     * 举例：用户从「我的」用返回键退回「首页」，swipeDir 还是上一次点标签留下的 +1
+     * （向右推进），转场就把首页从右边推进来，而用户刚做的是「往回退」，
+     * 方向与手势完全相反。跨标签回退时才看得出，页面内返回不受影响（两端不都是标签）。
+     *
+     * 这里补一个目的地监听：只有「离开的是标签、进入的也是标签」才改方向，
+     * 方向按新目标相对旧页面的次序算 —— 退回左边的标签自然是 -1，与前进相反，
+     * 正好是用户期待的「往回抽」的观感。二级页面的返回不碰它，
+     * 那些转场由 bothTabs 判成 false 走 enter/exit，用不到 swipeDir。
+     *
+     * 放在目的地变更监听里而不是包住返回键：后者要自己接管全部返回行为
+     * （含系统手势、二级页返回、结算页返回），一改就把整套返回逻辑接过来，
+     * 为一个转场方向冒这个不值。监听只读、不改导航。
+     */
+    DisposableEffect(nav) {
+        // 上一次生效的目的地。只在 nav 变化时重建，所以放在 effect 里当局部变量，
+        // 不需要 remember：AppRoot 会随状态收集频繁重组，
+        // 用普通局部变量的话它每帧都被重置回 null，方向就又算不出来了。
+        var fromRoute = nav.currentDestination?.route
+        val listener = androidx.navigation.NavController.OnDestinationChangedListener { _, destination, _ ->
+            val toRoute = destination.route
+            val fromIndex = TABS.indexOfFirst { it.route == fromRoute }
+            val toIndex = TABS.indexOfFirst { it.route == toRoute }
+            if (fromIndex >= 0 && toIndex >= 0 && fromIndex != toIndex) {
+                swipeDir = toIndex.compareTo(fromIndex)
+            }
+            fromRoute = toRoute
+        }
+        nav.addOnDestinationChangedListener(listener)
+        onDispose { nav.removeOnDestinationChangedListener(listener) }
+    }
+
     LaunchedEffect(Unit) { vm.refreshAll() }
 
     Scaffold(

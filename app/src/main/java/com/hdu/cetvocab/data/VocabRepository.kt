@@ -48,6 +48,25 @@ class VocabRepository(context: Context) {
     val userDb = UserDb(context)
     private val prefs = context.getSharedPreferences(WordDb.PREFS_NAME, Context.MODE_PRIVATE)
 
+    /**
+     * 内置词库不可用时要说给用户听的一句话，正常时为 null。
+     *
+     * 之所以要专门把它做成一个属性而不是让界面各自判断：词库读不出来时
+     * 所有查询都降级成空结果（见 [WordDb.reading]），界面于是显示「本级 0 词」
+     * 「暂无数据」，用户会以为进度丢了，反复重启甚至清空数据 —— 那才是真的丢数据。
+     * 唯一正确的动作是重装应用，而这句话必须有个地方说出来。
+     *
+     * [WordbookStatus.RECOVERED] 不提示：副本损坏后已经自动重拷成功，
+     * 用户视角里一切正常，弹一条「出过故障」只会造成困惑。
+     */
+    val wordbookProblem: String?
+        get() = when (wordDb.status) {
+            WordbookStatus.OK, WordbookStatus.RECOVERED -> null
+            WordbookStatus.CORRUPT ->
+                "内置词库文件无法读取，词库与闯关暂时不可用。学习进度存在另一个数据库里，" +
+                "重新安装本应用即可恢复，学习记录不会丢。"
+        }
+
     var stage: Int
         get() = prefs.getInt(KEY_STAGE, WordDb.STAGE_CET4)
         set(value) = prefs.edit().putInt(KEY_STAGE, value).apply()
@@ -68,6 +87,21 @@ class VocabRepository(context: Context) {
     var quizSessionSnapshot: String?
         get() = prefs.getString(KEY_QUIZ_SESSION, null)
         set(value) = prefs.edit().putString(KEY_QUIZ_SESSION, value).apply()
+
+    /**
+     * 「被新局挤掉的那一局」的快照。
+     *
+     * 快照键只有一个，而开新局会直接把它盖掉：用户答了 8 题、退出选关页又点开另一关，
+     * 前面那 8 题的进度就无声消失了 —— 既不提示，也找不回来。
+     * 开新局前先把旧局挪到这里存着，旧局就还有一次被继续的机会
+     * （挪动与取回都在 AppViewModel 的闯关快照一节里）。
+     *
+     * 只留一格，不留队列：同时压着两三局「待继续」在交互上无法向用户解释，
+     * 而一格已经覆盖了实际会发生的情形（用户顶多 interrupted 一次就忘了）。
+     */
+    var quizInterruptedSnapshot: String?
+        get() = prefs.getString(KEY_QUIZ_INTERRUPTED, null)
+        set(value) = prefs.edit().putString(KEY_QUIZ_INTERRUPTED, value).apply()
 
     var autoSpeak: Boolean
         get() = prefs.getBoolean(KEY_AUTOSPEAK, true)
@@ -845,6 +879,9 @@ class VocabRepository(context: Context) {
         const val THEME_DARK = 2
 
         private const val KEY_QUIZ_SESSION = "quiz_session"
+
+        /** 被新局挤掉的上一局，见 [quizInterruptedSnapshot] */
+        private const val KEY_QUIZ_INTERRUPTED = "quiz_interrupted"
         private const val KEY_STAGE = "stage"
         private const val KEY_GOAL = "daily_goal"
         private const val KEY_AUTOSPEAK = "auto_speak"

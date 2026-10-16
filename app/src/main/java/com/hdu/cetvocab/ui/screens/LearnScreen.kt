@@ -69,6 +69,8 @@ import com.hdu.cetvocab.ui.components.Tag
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 import com.hdu.cetvocab.ui.theme.Motion
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.hdu.cetvocab.ui.components.HitArea
 
 @Composable
 fun LearnScreen(
@@ -193,14 +195,24 @@ fun LearnScreen(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 trailingIcon = {
                     if (state.query.isNotEmpty()) {
-                        Text(
-                            text = "清除",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clickable(role = Role.Button) { vm.search("") }
-                                .padding(end = 12.dp)
-                        )
+                        // 「清除」原本是可点文字约 21dp（labelMedium 行高 + 只有 end 内边距）。
+                        // 热区补到 44dp：外层是 OutlinedTextField 的 trailingIcon 槽位，
+                        // 槽位本身就有 40dp 以上的高度，所以撑开热区不会让搜索框变高，
+                        // 文字仍贴在右侧 12dp 处。
+                        val clearInteraction = remember { MutableInteractionSource() }
+                        HitArea(
+                            onClick = { vm.search("") },
+                            interaction = clearInteraction,
+                            min = 44.dp,
+                            align = Alignment.CenterEnd
+                        ) {
+                            Text(
+                                text = "清除",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 12.dp)
+                            )
+                        }
                     }
                 },
                 colors = OutlinedTextFieldDefaults.colors(
@@ -245,26 +257,37 @@ fun LearnScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                    // 上下留白去掉：这一行的可点项「返回词库」原本只有约 30dp 高，
+                    // 现在由 44dp 的命中区决定行高（K13），再留 2dp 反而让整页更松。
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(role = Role.Button) { showingAllWords = false }
-                        .padding(horizontal = 2.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                val backInteraction = remember { MutableInteractionSource() }
+                // 胶囊（图标+文字）视觉尺寸不变，外层补到 44dp 命中区；
+                // 贴左对齐，标题仍停在原来的位置上。
+                HitArea(
+                    onClick = { showingAllWords = false },
+                    interaction = backInteraction,
+                    min = 44.dp,
+                    align = Alignment.CenterStart
                 ) {
-                    IconBack(
-                        modifier = Modifier.size(15.dp),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.width(3.dp))
-                    Text(
-                        text = "返回词库",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelLarge
-                    )
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .padding(horizontal = 2.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconBack(
+                            modifier = Modifier.size(15.dp),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            text = "返回词库",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
                 }
                 Spacer(Modifier.width(12.dp))
                 Text(
@@ -510,19 +533,24 @@ private fun PillButton(
     contentColor: androidx.compose.ui.graphics.Color,
     onClick: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(container)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp)
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = contentColor
-        )
+    val interaction = remember { MutableInteractionSource() }
+    // 「学习」胶囊原本只有约 30dp 高（labelMedium + 上下 6dp），是全应用最小的主要按钮之一。
+    // 热区补到 44dp，胶囊本身一点没改：单元行左边那个 46dp 的方块本来就比它高，
+    // 撑开的外层落在这行的既有高度里，卡片不会被顶厚。
+    HitArea(onClick = onClick, interaction = interaction, min = 44.dp) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(container)
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = contentColor
+            )
+        }
     }
 }
 

@@ -110,6 +110,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     // 恢复流程状态（纯 UI 选择，不需要跨页面存活）
     var restoreChoices by remember { mutableStateOf<List<File>>(emptyList()) }
     var restoreTarget by remember { mutableStateOf<File?>(null) }
+    // 备份与当前词库不是同一版时，由数据层抛出、这里负责问用户一句
+    val wordbookMismatch by vm.wordbookMismatch.collectAsState()
 
     fun copyPath(path: String) {
         // getSystemService 的返回值声明为 @Nullable，个别 ROM 上剪贴板服务会取不到；
@@ -415,16 +417,29 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     }
 
                     Spacer(Modifier.height(10.dp))
+                    /*
+                     * 「当前桌面显示」讲系统里真正生效的那个图标，不是用户刚点的选项：
+                     * 图标要到 onStop 才落地、个别设备的桌面根本不允许应用换图标，
+                     * 之前这句直接按 state.iconStyle 写，切换失败时它一直是假的。
+                     * 读不到实际状态（null）时退回按选择显示，不猜。
+                     */
+                    val desktop = state.desktopIconStyle ?: state.iconStyle
+                    val pending = desktop != state.iconStyle
                     Text(
-                        text = if (state.iconStyle == LauncherIcons.STYLE_SIMPLE) {
-                            "当前桌面显示：简洁图标「$simpleChar」（${
-                                WordDb.stageLabel(state.stage)
-                            }）"
-                        } else {
-                            "当前桌面显示：默认书本图标"
+                        text = when {
+                            pending && state.iconStyle == LauncherIcons.STYLE_SIMPLE ->
+                                "桌面图标待切换：现在是书本图标，回到桌面后变成「$simpleChar」"
+                            pending ->
+                                "桌面图标待切换：现在是简洁图标，回到桌面后变回书本图标"
+                            state.iconStyle == LauncherIcons.STYLE_SIMPLE ->
+                                "当前桌面显示：简洁图标「$simpleChar」（${
+                                    WordDb.stageLabel(state.stage)
+                                }）"
+                            else -> "当前桌面显示：默认书本图标"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (pending) LocalAppColors.current.warning
+                        else MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(Modifier.height(4.dp))
@@ -692,6 +707,33 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
             },
             dismissButton = {
                 TextButton(onClick = { restoreTarget = null }) { Text(stringResource(R.string.action_cancel)) }
+            }
+        )
+    }
+
+    // 备份来自另一版词库：数据层一行数据都还没动就抛回来，这里把差异说清楚再让用户决定。
+    // 「仍要恢复」必须是明确的一次点击，不能默认放行 —— 旧备份往往只有这一份，
+    // 直接拒掉等于把用户的进度锁在门外，但放行确实会有进度缺口，两害要让用户自己称。
+    wordbookMismatch?.let { m ->
+        AlertDialog(
+            onDismissRequest = { vm.dismissWordbookMismatch() },
+            title = { Text(stringResource(R.string.restore_wordbook_title)) },
+            text = {
+                Text(
+                    m.detail + "\n\n" +
+                        "仍要恢复的话，对不上当前词库的记录会被跳过，" +
+                        "恢复结果可能出现进度缺口。建议先在电脑上打开这份备份确认词库版本。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.restoreIgnoringWordbookMismatch() }) {
+                    Text(stringResource(R.string.restore_wordbook_keep), color = LocalAppColors.current.danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.dismissWordbookMismatch() }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
         )
     }

@@ -42,8 +42,8 @@ android {
         // v1.4.4 = 第四轮审查修复：备份恢复的孤儿数据保护、闯关结算前等逐题入库落库、
         // 「我的/设置」显示旧级别旧目标、恢复失败后残留的死按钮、小词量字母恢复必然失败、
         // 音效线程回调竞态与音轨泄漏等。
-        versionCode = 45
-        versionName = "1.4.4"
+        versionCode = 46
+        versionName = "1.4.5"
         vectorDrawables { useSupportLibrary = true }
     }
 

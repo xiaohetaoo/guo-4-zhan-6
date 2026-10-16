@@ -21,15 +21,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.hdu.cetvocab.data.AchievementDef
 import com.hdu.cetvocab.data.Achievements
 import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
+import com.hdu.cetvocab.ui.components.AchievementDetailDialog
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.AppTopBar
 import com.hdu.cetvocab.ui.components.IconTrophy
@@ -49,6 +54,11 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
     else (unlockedCount.toFloat() / total).coerceIn(0f, 1f)
     val goldenCount = Achievements.ALL.count { it.tier == 3 && unlocked.containsKey(it.code) }
     val goldenTotal = Achievements.ALL.count { it.tier == 3 }
+    /*
+     * 点开看详情的成就。三列网格每格只有约 94dp 宽，长说明被压成两行加省略号，
+     * 用户在成就墙上看到的是「徽章 + 半句话」，看不到完整达成条件与解锁时间。
+     */
+    var detail by remember { mutableStateOf<AchievementDef?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         AppTopBar(
@@ -124,7 +134,8 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     AchievementBadge(
                         def = def,
                         unlocked = unlocked.containsKey(def.code),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { detail = def }
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -141,5 +152,13 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    detail?.let { def ->
+        AchievementDetailDialog(
+            def = def,
+            unlockedTs = unlocked[def.code],
+            onDismiss = { detail = null }
+        )
     }
 }

@@ -117,7 +117,12 @@ class MainActivity : ComponentActivity() {
         // 在任务栈销毁后仍被协程闭包持有 —— 一次有界但真实的泄漏。
         // LauncherIcons 只需要 Context 拿 PackageManager，Application 完全够用。
         app.appScope.launch {
-            runCatching { LauncherIcons.apply(app, app.repo.iconStyle, app.repo.stage) }
+            // 失败不在这里直接提示：应用此刻已经在后台，Snackbar 没人看得见。
+            // 交给 onIconApplyFailed() 存起来，下次回到前台补一句（K10）。
+            val result = runCatching {
+                LauncherIcons.apply(app, app.repo.iconStyle, app.repo.stage)
+            }.getOrDefault(LauncherIcons.ApplyResult.FAILED)
+            if (result == LauncherIcons.ApplyResult.FAILED) vm.onIconApplyFailed()
         }
     }
 }

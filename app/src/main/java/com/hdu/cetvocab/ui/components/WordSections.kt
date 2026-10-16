@@ -56,7 +56,14 @@ fun SpeakButton(
     modifier: Modifier = Modifier,
     size: Dp = 44.dp,
     filled: Boolean = true,
-    label: String? = null
+    label: String? = null,
+    /**
+     * 命中区边长。默认把小于 44dp 的芯片补到 44dp：
+     * 例句行、题目行里的喇叭只有 30~32dp，按 Material 的 48dp 底线（以及
+     * 无障碍检查）都偏小，但直接把喇叭画大又会顶开整行的排版。
+     * 于是芯片保持 [size]，外面套一层 [min] 的透明可点区域。
+     */
+    min: Dp = if (size >= 44.dp) size else 44.dp
 ) {
     val speakLabel = label ?: stringResource(R.string.action_speak)
     val interaction = remember { MutableInteractionSource() }
@@ -64,12 +71,11 @@ fun SpeakButton(
     else MaterialTheme.colorScheme.primaryContainer
     val fg = if (filled) MaterialTheme.colorScheme.onPrimary
     else MaterialTheme.colorScheme.onPrimaryContainer
+    // 可点区域在外层，绘制在内层，两层共用一个 InteractionSource：
+    // 点击发生在外层，按压动画画在内层，拆开两个 source 就会「点得动但芯片不缩」。
     Box(
         modifier = modifier
-            .size(size)
-            .springPress(interaction, pressedScale = 0.86f)
-            .clip(CircleShape)
-            .background(bg)
+            .size(min)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
@@ -79,33 +85,42 @@ fun SpeakButton(
             .semantics { contentDescription = speakLabel },
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.size(size * 0.46f)) {
-            val w = this.size.width
-            val h = this.size.height
-            val horn = Path().apply {
-                moveTo(w * 0.02f, h * 0.34f)
-                lineTo(w * 0.26f, h * 0.34f)
-                lineTo(w * 0.50f, h * 0.08f)
-                lineTo(w * 0.50f, h * 0.92f)
-                lineTo(w * 0.26f, h * 0.66f)
-                lineTo(w * 0.02f, h * 0.66f)
-                close()
+        Box(
+            modifier = Modifier
+                .size(size)
+                .springPress(interaction, pressedScale = 0.86f)
+                .clip(CircleShape)
+                .background(bg),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(Modifier.size(size * 0.46f)) {
+                val w = this.size.width
+                val h = this.size.height
+                val horn = Path().apply {
+                    moveTo(w * 0.02f, h * 0.34f)
+                    lineTo(w * 0.26f, h * 0.34f)
+                    lineTo(w * 0.50f, h * 0.08f)
+                    lineTo(w * 0.50f, h * 0.92f)
+                    lineTo(w * 0.26f, h * 0.66f)
+                    lineTo(w * 0.02f, h * 0.66f)
+                    close()
+                }
+                drawPath(horn, fg)
+                drawArc(
+                    color = fg,
+                    startAngle = -55f, sweepAngle = 110f, useCenter = false,
+                    topLeft = Offset(w * 0.42f, h * 0.28f),
+                    size = Size(w * 0.34f, h * 0.44f),
+                    style = Stroke(width = w * 0.085f, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = fg,
+                    startAngle = -55f, sweepAngle = 110f, useCenter = false,
+                    topLeft = Offset(w * 0.44f, h * 0.12f),
+                    size = Size(w * 0.54f, h * 0.76f),
+                    style = Stroke(width = w * 0.085f, cap = StrokeCap.Round)
+                )
             }
-            drawPath(horn, fg)
-            drawArc(
-                color = fg,
-                startAngle = -55f, sweepAngle = 110f, useCenter = false,
-                topLeft = Offset(w * 0.42f, h * 0.28f),
-                size = Size(w * 0.34f, h * 0.44f),
-                style = Stroke(width = w * 0.085f, cap = StrokeCap.Round)
-            )
-            drawArc(
-                color = fg,
-                startAngle = -55f, sweepAngle = 110f, useCenter = false,
-                topLeft = Offset(w * 0.44f, h * 0.12f),
-                size = Size(w * 0.54f, h * 0.76f),
-                style = Stroke(width = w * 0.085f, cap = StrokeCap.Round)
-            )
         }
     }
 }
