@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ 的备份与设备迁移规则。
+
+  背景：`android:allowBackup="false"` 从 Android 12 起**只约束云备份**，
+  设备到设备的直接迁移（D2D）改由本文件决定；不声明时系统按默认规则
+  几乎把全部数据搬过去 —— 而本应用对外承诺的是「学习进度、成绩与成就
+  仅保存在本机数据库，不上传任何服务器」，换机时也不需要系统代搬
+  （用户有自己的 JSON 备份 + 恢复功能）。
+
+  所以云备份与设备迁移**两段都排除**：数据库、文件、shared prefs 一律不带走。
+  这样才与设置页「数据来源与授权」「离线运行说明」两处的措辞一致。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- 学习记录库、导出与备份文件、偏好设置都留在本机 -->
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <!-- 换机迁移同样不带走：用户应通过「备份数据 / 恢复数据」自行迁移 -->
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>

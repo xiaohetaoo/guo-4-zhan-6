@@ -98,10 +98,20 @@ class BackupManager(
                     c.getLong(4), c.getLong(5)))
             }
         }
+        /*
+         * 没有任何记录时不落盘：一份只有表头的 CSV 配一句「学习记录已导出」，
+         * 用户会以为数据丢了或导出功能坏了。直接抛给调用方一句人话即可
+         * （AppViewModel 对 IllegalArgumentException 原样展示，见 fileErrorMessage）。
+         */
+        require(rows.isNotEmpty()) { "还没有学习记录可以导出" }
         val wordsById = HashMap<Int, String>()
         wordDb.wordsByIds(rows.map { it.wordId }).forEach { wordsById[it.id] = it.word }
 
         val sb = StringBuilder()
+        // UTF-8 BOM：中文 Windows 版 Excel 打开无 BOM 的 UTF-8 CSV 会按本机代码页
+        // （GBK）解码，中文释义与「四级/六级」标签整列乱码 —— 而导出正是给用户
+        // 拿到电脑上看的，乱码等于白导。BOM 是让 Excel 认出 UTF-8 的唯一可靠办法。
+        sb.append(CSV_BOM)
         sb.append("word,level,wrong_count,fav,last_study,next_review\n")
         rows.forEach { r ->
             sb.append(csvCell(wordsById[r.wordId] ?: "#${r.wordId}")).append(',')
@@ -118,13 +128,15 @@ class BackupManager(
 
     /** 导出收藏的单词本，按字母序 */
     fun exportFavCsv(): File {
-        val file = uniqueFile(exportDir(), "单词本_${stamp()}", "csv")
         val favIds = ArrayList<Int>()
         userDb.readableDatabase.rawQuery(
             "SELECT word_id FROM word_state WHERE fav=1", null
         ).use { c -> while (c.moveToNext()) favIds.add(c.getInt(0)) }
         val words = wordDb.wordsByIds(favIds).sortedBy { it.word.lowercase(Locale.ROOT) }
+        require(words.isNotEmpty()) { "还没有收藏的生词可以导出" }
+        val file = uniqueFile(exportDir(), "单词本_${stamp()}", "csv")
         val sb = StringBuilder()
+        sb.append(CSV_BOM)
         sb.append("word,phonetic,translation,stage,unit\n")
         for (w in words) {
             sb.append(csvCell(w.word)).append(',')
@@ -413,7 +425,17 @@ class BackupManager(
         val allLogs = logArr.objects()
         val logs = allLogs.filter { it.optInt("word_id", -1) in validIds }
         val quizzes = quizArr.objects()
-        val skipped = (allStates.size - states.size) + (allLogs.size - logs.size)
+        /*
+         * skipped 必须把**所有**会被静默丢弃的段都算进去。
+         *
+         * 早先只统计 word_state / study_log 两段，于是错题集的孤儿与非法 kind、
+         * 成就段里当前版本不认识的 code、统计段里解析不成数字的值 ——
+         * 这些同样被丢掉，界面却显示「跳过 0 条失效记录」，用户以为全都恢复成功了。
+         * 这里先把前面几段的差值算出来，后面各段的丢弃数累加到 [skippedExtra] 上。
+         */
+        var skipped = (allStates.size - states.size) + (allLogs.size - logs.size)
+        /** 写回阶段各段被丢弃的条目数（错题集 / 成就 / 统计），见上面 skipped 的说明 */
+        var skippedExtra = 0
         /*
          * 上面那道「至少有一段非空」的校验看的是**输入**，而孤儿过滤发生在它之后。
          * 于是这种输入照样能走到写回：备份里确实有 200 条记录，但词库重排过、
@@ -509,9 +531,12 @@ class BackupManager(
             // 错题集回填：只收「当前词库里还在的词」和「重做功能真会出的两种题型」。
             // 题型限定在 MEANING / SPELLING：易混词与真题翻译从不进错题集，
             // 备份里冒出别的 kind 只能是被改过的值，收进来只会变成出不了题的死记录。
-            wrongArr.objects()
+            val wrongAll = wrongArr.objects()
+            val wrongKept = wrongAll
                 .filter { it.optInt("word_id", -1) in validIds }
                 .filter { it.optInt("kind", -1) in 0..QuizKind.SPELLING.ordinal }
+            skippedExtra += wrongAll.size - wrongKept.size
+            wrongKept
                 .forEach { o ->
                     db.insertWithOnConflict(
                         "quiz_wrong", null,
@@ -532,23 +557,54 @@ class BackupManager(
             // 恢复带回当前版本没有的成就码时，成就墙会显示「已解锁 100 / 81 个成就」，
             // 而进度条用的 fraction 大于 1 会直接触发 require 断言崩溃。
             val knownCodes = Achievements.ALL.mapTo(HashSet()) { it.code }
-            achArr.objects()
-                .filter { it.optString("code") in knownCodes }
+            val achAll = achArr.objects()
+            val achKept = achAll.filter { it.optString("code") in knownCodes }
+            skippedExtra += achAll.size - achKept.size
+            achKept
                 .forEach { o ->
                     db.insertWithOnConflict(
                         "achievement", null,
                         ContentValues().apply {
                             put("code", o.optString("code"))
-                            put("unlocked_ts", o.optLong("unlocked_ts"))
+                            // 解锁时间也夹一刀：负数/0 会让详情弹层显示「1970年01月01日」，
+                            // 用户以为成就数据坏了（详情层对 ts<=0 另有兜底文案）
+                            put("unlocked_ts", o.optLong("unlocked_ts").coerceAtLeast(0L))
                         },
                         SQLiteDatabase.CONFLICT_REPLACE
                     )
                 }
             metaArr.objects().forEach { o ->
+                /*
+                 * 这是本文件里唯一一处**必须把守卫提到 insert 之外**的回填，原因是一个真实陷阱：
+                 *
+                 * 早先的写法是「先把 k/v 放进 ContentValues，再在 if 里决定要不要 put」——
+                 * 于是当键取不到值（空 key，或 study_seconds 的值不是数字）时，
+                 * 两个 put 都不执行，但 `insertWithOnConflict` 仍被调用，且传进去的是
+                 * **空 ContentValues**；空 key 的情况更隐蔽：`put("k","")` 无条件执行过，
+                 * 于是只剩 `v` 缺失。
+                 * 而 `app_meta.v` 是 NOT NULL（UserDb 建表），两种情况都会抛
+                 * `SQLiteConstraintException: NOT NULL constraint failed: app_meta.v`。
+                 * 关键危害在**事务边界**：异常发生在 beginTransaction 之后，
+                 * finally 里的 endTransaction() 会把六张表**全部回滚** ——
+                 * 用户拿到的是一句指向「存储空间不足」的技术报错，
+                 * 而不是「这份备份的这一段有问题」。数据虽然没丢（回滚了），
+                 * 但整次恢复被一段本可以跳过的脏数据废掉了。
+                 *
+                 * 所以：不合法就**整个跳过这一次 insert**，不是「跳过某几个字段」。
+                 */
+                val key = o.optString("k")
+                val value = o.optString("v")
+                val legal = key.isNotEmpty() &&
+                    (key != UserDb.KEY_STUDY_SECONDS || value.toLongOrNull() != null)
+                if (!legal) {
+                    // 被跳过的条目要计入 skipped，让界面如实报数（见 RestoreReport）
+                    skippedExtra++
+                    return@forEach
+                }
                 db.insertWithOnConflict(
                     "app_meta", null,
                     ContentValues().apply {
-                        put("k", o.optString("k"))
+                        put("k", key)
                         /*
                          * 统计段的值必须是能解析回数字的字符串。app_meta 现在只存
                          * study_seconds，而读它的一侧写的是 `getMeta(...).toLongOrNull() ?: 0`：
@@ -556,14 +612,7 @@ class BackupManager(
                          * 下一次读就把累计学习时长静默当成 0，等于把「累计学习 N 分钟」清零。
                          * 与其在写的一侧猜，不如在这里挡住 —— 解析不了的键直接不收。
                          */
-                        val key = o.optString("k")
-                        val value = o.optString("v")
-                        if (key.isNotEmpty() &&
-                            (key != UserDb.KEY_STUDY_SECONDS || value.toLongOrNull() != null)
-                        ) {
-                            put("k", key)
-                            put("v", value)
-                        }
+                        put("v", value)
                     },
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
@@ -603,11 +652,27 @@ class BackupManager(
                     putFloat(KEY_RATE, p.optDouble(KEY_RATE, 0.92).toFloat().coerceIn(0.5f, 1.4f))
                 }
                 if (p.has(KEY_UNIT)) putInt(KEY_UNIT, p.optInt(KEY_UNIT, 0).coerceAtLeast(0))
+                /*
+                 * 图标风格与明暗模式同样要夹。此前只有这两项原样写入 ——
+                 * 手改备份写成 theme=9 之后，这个非法值会永久留在偏好里，
+                 * 而 app 的**任何** UI 路径都产生不出它：
+                 * `when (repo.themeMode)` 只有 else 兜底尚可，但图标侧
+                 * `style != STYLE_SIMPLE` 会把 9 当成「默认图标」——
+                 * 于是设置页显示「默认图标」而用户选的是简洁图标，且再也调不回来。
+                 */
                 if (p.has(KEY_ICON_STYLE)) {
-                    putInt(KEY_ICON_STYLE, p.optInt(KEY_ICON_STYLE, LauncherIcons.STYLE_DEFAULT))
+                    putInt(
+                        KEY_ICON_STYLE,
+                        p.optInt(KEY_ICON_STYLE, LauncherIcons.STYLE_DEFAULT)
+                            .coerceIn(LauncherIcons.STYLE_DEFAULT, LauncherIcons.STYLE_SIMPLE)
+                    )
                 }
                 if (p.has(KEY_THEME)) {
-                    putInt(KEY_THEME, p.optInt(KEY_THEME, VocabRepository.THEME_SYSTEM))
+                    putInt(
+                        KEY_THEME,
+                        p.optInt(KEY_THEME, VocabRepository.THEME_SYSTEM)
+                            .coerceIn(VocabRepository.THEME_SYSTEM, VocabRepository.THEME_DARK)
+                    )
                 }
                 if (p.has(KEY_ANIM)) {
                     putBoolean(KEY_ANIM, p.optBoolean(KEY_ANIM, true))
@@ -618,7 +683,7 @@ class BackupManager(
             }.commit()
         }
 
-        return RestoreReport(states.size, logs.size, quizzes.size, skipped)
+        return RestoreReport(states.size, logs.size, quizzes.size, skipped + skippedExtra)
     }
 
     // ---------------- 内部工具 ----------------
@@ -663,6 +728,14 @@ class BackupManager(
         /** 备份文件的身份标识字段与取值：恢复时据此判断「这是不是本产品的备份」 */
         private const val KEY_APP = "app"
         private const val APP_ID = "过四斩六"
+
+        /**
+         * CSV 的 UTF-8 BOM。必须写在文件最前面：
+         * 中文 Windows 版 Excel 双击打开无 BOM 的 UTF-8 CSV 时，
+         * 会按本机代码页（GBK）解码，中文释义整列变乱码 —— 而导出正是
+         * 给用户拿去电脑上看的。BOM 是让 Excel 正确识别 UTF-8 的标准做法。
+         */
+        private const val CSV_BOM = "\uFEFF"
 
         /** 备份文件名前缀，[listBackups] 据此过滤，避免把目录里其它 .json 当成备份 */
         private const val BACKUP_PREFIX = "cetvocab_backup_"

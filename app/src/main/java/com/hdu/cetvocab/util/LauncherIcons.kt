@@ -50,6 +50,14 @@ object LauncherIcons {
     private const val SI = "com.hdu.cetvocab.LauncherSimpleSi"
     private const val LIU = "com.hdu.cetvocab.LauncherSimpleLiu"
 
+    /**
+     * 对外的 alias 常量。设置页要按**实际生效**的 alias 推出「四/六」，
+     * 就得能认出这两个值；写成 public 常量免得调用方自己抄一遍字符串。
+     */
+    const val ALIAS_SI = SI
+    const val ALIAS_LIU = LIU
+    const val ALIAS_DEFAULT = DEFAULT
+
     private val ALL = listOf(DEFAULT, SI, LIU)
 
     /**
@@ -209,4 +217,16 @@ object LauncherIcons {
         SI, LIU -> STYLE_SIMPLE
         else -> null
     }
+
+    /**
+     * 桌面**现在**生效的那个入口（[DEFAULT] / [SI] / [LIU]）；读不出来返回 null。
+     *
+     * [appliedStyle] 不够用：它只把三个入口归成两档（默认 / 简洁），
+     * 而简洁档下「四」和「六」是两个不同的 alias。设置页那句
+     * 「当前桌面显示：简洁图标「六」」里的字必须来自**实际生效**的 alias，
+     * 不能读用户刚选的级别 —— 图标要到 onStop 才落地，
+     * 「简洁图标 + 四级 → 回首页切六级 → 立刻进设置页」这个序列里，
+     * 页面会写「六」而桌面此刻仍是「四」。
+     */
+    fun appliedAlias(context: Context): String? = currentAlias(context)
 }

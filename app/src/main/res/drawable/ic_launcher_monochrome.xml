@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!--
+      单色前景，专供自适应图标的 <monochrome>（Android 13+ 主题图标）。
+
+      与 ic_launcher_foreground.xml 的区别只有一处：**全部路径统一填白**。
+      系统在渲染主题图标时只取本矢量的 alpha 通道当形状，再用主题色重着色，
+      所以这里用什么颜色其实无所谓 —— 重要的是不能用多色（那样系统会把
+      整块前景当成一个实心形状，书本与火花的层次全部丢失）。
+      白色的含义是「完全不透明的形状」。
+
+      路径与彩色版逐一对应：左页 / 右页 / 书脊 / 上方火花。
+    -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M29,42 L52,35 L52,76 L29,83 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M79,42 L56,35 L56,76 L79,83 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M52,35 L56,35 L56,76 L52,76 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,22 L56.2,29.2 L63.5,31.4 L56.2,33.6 L54,40.8 L51.8,33.6 L44.5,31.4 L51.8,29.2 Z" />
+</vector>

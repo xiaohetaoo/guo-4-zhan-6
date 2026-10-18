@@ -24,6 +24,37 @@ private val RANKED_ONLY: String =
  */
 class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
 
+    /**
+     * 学习记录库的可用性。
+     *
+     * 与 [WordDb.status] 是同一套思路，但方向恰好相反、代价也更大：
+     * 词库损坏可以从 assets 重拷（可再生），学习记录损坏**不可再生** ——
+     * 用户唯一的出路是从备份恢复。所以这里也必须把「读不出来」变成
+     * 「一句人话 + 一个可继续操作的界面」，而不是让异常穿过 viewModelScope 崩掉应用。
+     *
+     * 为什么必须做：本类的读方法（[states]、[achievements]、[quizRecords]…）
+     * 遍布首页 / 词库 / 我的三条刷新链路，而这三条链路又都在
+     * `AppRoot` 的 `LaunchedEffect(Unit) { refreshAll() }` 里 —— 也就是说
+     * 库一旦在读取中途损坏（闪存故障、异常掉电），会退化成「每次冷启动都崩，
+     * 用户只能去系统设置里清数据（连带丢掉全部进度）」。
+     * `WordDb.kt` 的注释点名过这个「无限闪退循环」，只是当时只保护了词库那一侧。
+     */
+    @Volatile
+    var status: UserDbStatus = UserDbStatus.OK
+        private set
+
+    /** 记录一次读取失败：损坏与其它不可用分开，界面据此决定说哪一句 */
+    internal fun noteFailure(t: Throwable) {
+        status = if (isCorruption(t)) UserDbStatus.CORRUPT else UserDbStatus.UNAVAILABLE
+    }
+
+    private fun isCorruption(t: Throwable): Boolean =
+        t is android.database.sqlite.SQLiteDatabaseCorruptException ||
+            t is android.database.sqlite.SQLiteDiskIOException ||
+            (t is android.database.sqlite.SQLiteException &&
+                (t.message?.contains("malformed", true) == true ||
+                    t.message?.contains("not a database", true) == true))
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE word_state(" +
@@ -144,12 +175,33 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
 
     // ---------- 单词状态 ----------
 
-    fun states(): Map<Int, WordState> {
+    /**
+     * 读操作的统一入口：任何一次读失败都**降级返回 [fallback]**，
+     * 同时把 [status] 标成损坏/不可用，由界面层负责说出来。
+     *
+     * 与 [WordDb.reading] 同构。之所以不能直接往外抛：这些查询的调用方
+     * 全部跑在 `viewModelScope` 里，而 viewModelScope 没配 CoroutineExceptionHandler
+     * —— 未捕获异常会直接结束协程并让应用崩溃。降级 + 状态位是把崩溃换成一句人话
+     * 的唯一办法，且**学习记录本身还在库里**，用户可以从备份恢复。
+     *
+     * 注意这里不删库、不重建：用户数据的损坏是「读不出来」，
+     * 而不是「需要重装」—— 唯一正确的动作是提示用户从备份恢复，
+     * 任何自动清库都会把还能救的数据真的抹掉。
+     */
+    private fun <T> reading(fallback: T, block: (SQLiteDatabase) -> T): T =
+        try {
+            block(readableDatabase)
+        } catch (e: Exception) {
+            noteFailure(e)
+            fallback
+        }
+
+    fun states(): Map<Int, WordState> = reading(emptyMap()) { db ->
         val map = HashMap<Int, WordState>()
-        readableDatabase.rawQuery("SELECT $STATE_COLUMNS FROM word_state", null).use { c ->
+        db.rawQuery("SELECT $STATE_COLUMNS FROM word_state", null).use { c ->
             while (c.moveToNext()) map[c.getInt(0)] = c.toWordState()
         }
-        return map
+        map
     }
 
     /**
@@ -159,11 +211,12 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
      * 读进内存，而本方法在 markLearned / toggleFav / answerWord 里被逐词调用，
      * 学一组 50 个词就会退化成 O(N²) 的全表扫描。
      */
-    fun stateOf(wordId: Int): WordState =
-        readableDatabase.rawQuery(
+    fun stateOf(wordId: Int): WordState = reading(WordState(wordId)) { db ->
+        db.rawQuery(
             "SELECT $STATE_COLUMNS FROM word_state WHERE word_id=?",
             arrayOf(wordId.toString())
         ).use { c -> if (c.moveToFirst()) c.toWordState() else WordState(wordId) }
+    }
 
     /**
      * 记录一次作答结果。
@@ -254,37 +307,40 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         writableDatabase.insert("study_log", null, cv)
     }
 
-    fun todayLearnedCount(): Int =
-        readableDatabase.rawQuery(
+    fun todayLearnedCount(): Int = reading(0) { db ->
+        db.rawQuery(
             "SELECT COUNT(DISTINCT word_id) FROM study_log WHERE day=?", arrayOf(today())
         ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    }
 
-    fun distinctWordCount(): Int =
-        readableDatabase.rawQuery(
+    fun distinctWordCount(): Int = reading(0) { db ->
+        db.rawQuery(
             "SELECT COUNT(DISTINCT word_id) FROM study_log", null
         ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    }
 
-    fun correctWrongTotals(): Pair<Int, Int> =
-        readableDatabase.rawQuery(
+    fun correctWrongTotals(): Pair<Int, Int> = reading(0 to 0) { db ->
+        db.rawQuery(
             "SELECT SUM(correct), COUNT(*)-SUM(correct) FROM study_log", null
         ).use {
             if (it.moveToFirst()) (it.getInt(0)) to (it.getInt(1)) else 0 to 0
         }
-
-    fun studyDays(): List<String> {
-        val days = ArrayList<String>()
-        readableDatabase.rawQuery(
-            "SELECT DISTINCT day FROM study_log ORDER BY day DESC", null
-        ).use { c -> while (c.moveToNext()) days.add(c.getString(0)) }
-        return days
     }
 
-    fun recentDays(n: Int): List<DayStat> {
+    fun studyDays(): List<String> = reading(emptyList()) { db ->
+        val days = ArrayList<String>()
+        db.rawQuery(
+            "SELECT DISTINCT day FROM study_log ORDER BY day DESC", null
+        ).use { c -> while (c.moveToNext()) days.add(c.getString(0)) }
+        days
+    }
+
+    fun recentDays(n: Int): List<DayStat> = reading(emptyList()) { db ->
         val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         val today = LocalDate.now()
         val from = today.minusDays((n - 1).toLong()).format(fmt)
         val raw = HashMap<String, DayStat>()
-        readableDatabase.rawQuery(
+        db.rawQuery(
             "SELECT day, COUNT(DISTINCT word_id), SUM(correct), COUNT(*)-SUM(correct) " +
                 "FROM study_log WHERE day>=? GROUP BY day", arrayOf(from)
         ).use { c ->
@@ -292,7 +348,7 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
                 raw[c.getString(0)] = DayStat(c.getString(0), c.getInt(1), c.getInt(2), c.getInt(3))
             }
         }
-        return (0 until n).map { i ->
+        (0 until n).map { i ->
             val d = today.minusDays((n - 1 - i).toLong()).format(fmt)
             raw[d] ?: DayStat(d, 0, 0, 0)
         }
@@ -362,18 +418,19 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
     }
 
     /** 当前级别的待重做错题数，供排行榜汇总卡显示。 */
-    fun quizWrongCount(stage: Int): Int =
-        readableDatabase.rawQuery(
+    fun quizWrongCount(stage: Int): Int = reading(0) { db ->
+        db.rawQuery(
             "SELECT COUNT(*) FROM quiz_wrong WHERE stage=?", arrayOf(stage.toString())
         ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    }
 
     /**
      * 重做队列取题：错得多的优先，同样多的先错的优先。
      * 排序键写死在 SQL 里，与 idx_wrong_stage 的顺序一致，避免全表排序。
      */
-    fun quizWrongEntries(stage: Int, limit: Int): List<QuizWrong> {
+    fun quizWrongEntries(stage: Int, limit: Int): List<QuizWrong> = reading(emptyList()) { db ->
         val list = ArrayList<QuizWrong>()
-        readableDatabase.rawQuery(
+        db.rawQuery(
             "SELECT stage,kind,word_id,wrong_count,last_ts FROM quiz_wrong " +
                 "WHERE stage=? ORDER BY wrong_count DESC, last_ts ASC LIMIT $limit",
             arrayOf(stage.toString())
@@ -382,12 +439,12 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
                 list.add(QuizWrong(c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getLong(4)))
             }
         }
-        return list
+        list
     }
 
-    fun allQuizWrong(): List<QuizWrong> {
+    fun allQuizWrong(): List<QuizWrong> = reading(emptyList()) { db ->
         val list = ArrayList<QuizWrong>()
-        readableDatabase.rawQuery(
+        db.rawQuery(
             "SELECT stage,kind,word_id,wrong_count,last_ts FROM quiz_wrong " +
                 "ORDER BY stage,kind,word_id", null
         ).use { c ->
@@ -395,7 +452,7 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
                 list.add(QuizWrong(c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getLong(4)))
             }
         }
-        return list
+        list
     }
 
     /** 备份恢复用：整表替换（先清后插），与其余各段的「清空再写回」口径一致。 */
@@ -420,9 +477,9 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         writableDatabase.execSQL("DELETE FROM quiz_wrong")
     }
 
-    fun quizRecords(limit: Int = 100): List<QuizRecord> {
+    fun quizRecords(limit: Int = 100): List<QuizRecord> = reading(emptyList()) { db ->
         val list = ArrayList<QuizRecord>()
-        readableDatabase.rawQuery(
+        db.rawQuery(
             "SELECT id,stage,unit,mode,score,total,correct,max_combo,duration_ms,ts " +
                 "FROM quiz_record WHERE $RANKED_ONLY ORDER BY score DESC, ts DESC LIMIT $limit", null
         ).use { c ->
@@ -435,12 +492,12 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
                 )
             }
         }
-        return list
+        list
     }
 
-    fun recentQuizRecords(limit: Int = 20): List<QuizRecord> {
+    fun recentQuizRecords(limit: Int = 20): List<QuizRecord> = reading(emptyList()) { db ->
         val list = ArrayList<QuizRecord>()
-        readableDatabase.rawQuery(
+        db.rawQuery(
             "SELECT id,stage,unit,mode,score,total,correct,max_combo,duration_ms,ts " +
                 "FROM quiz_record WHERE $RANKED_ONLY ORDER BY ts DESC LIMIT $limit", null
         ).use { c ->
@@ -453,22 +510,24 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
                 )
             }
         }
-        return list
+        list
     }
 
-    fun bestScore(): Int =
-        readableDatabase.rawQuery(
+    fun bestScore(): Int = reading(0) { db ->
+        db.rawQuery(
             "SELECT MAX(score) FROM quiz_record WHERE $RANKED_ONLY", null
         ).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
+    }
 
-    fun quizPlayedCount(): Int =
-        readableDatabase.rawQuery(
+    fun quizPlayedCount(): Int = reading(0) { db ->
+        db.rawQuery(
             "SELECT COUNT(*) FROM quiz_record WHERE $RANKED_ONLY", null
         ).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
+    }
 
     /**
      * 全部闯关次数，**不**排除辨析 / 翻译两类拓展练习。
@@ -479,10 +538,11 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
      * 「已解锁明辨秋毫、却显示还没初次闯关」的自相矛盾。
      * 凡是对用户表述为「累计闯关 N 次」的判定，一律走这个全量口径。
      */
-    fun quizPlayedCountAll(): Int =
-        readableDatabase.rawQuery("SELECT COUNT(*) FROM quiz_record", null).use {
+    fun quizPlayedCountAll(): Int = reading(0) { db ->
+        db.rawQuery("SELECT COUNT(*) FROM quiz_record", null).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
+    }
 
     /**
      * 排行榜页顶部三块统计（最高分 / 平均分 / 最高正确率 + 总次数），一次查询算完。
@@ -496,8 +556,8 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
      * 早先这里写的是整数除法，与 Kotlin 侧一致但两边一起错：
      * 99.5% 在排行榜显示 99、在首页进度显示 100。
      */
-    fun quizAggregate(): QuizAggregate =
-        readableDatabase.rawQuery(
+    fun quizAggregate(): QuizAggregate = reading(QuizAggregate()) { db ->
+        db.rawQuery(
             "SELECT COUNT(*), IFNULL(MAX(score), 0), IFNULL(CAST(AVG(score) AS INTEGER), 0), " +
                 "IFNULL(MAX(CASE WHEN total > 0 THEN CAST(ROUND(correct * 100.0 / total) AS INTEGER) ELSE 0 END), 0) " +
                 "FROM quiz_record WHERE $RANKED_ONLY", null
@@ -513,15 +573,17 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
                 QuizAggregate()
             }
         }
+    }
 
     /** 某一专题关卡（按 unit 范围值）的完成次数 */
-    fun quizCountOfUnit(unit: Int): Int =
-        readableDatabase.rawQuery(
+    fun quizCountOfUnit(unit: Int): Int = reading(0) { db ->
+        db.rawQuery(
             "SELECT COUNT(*) FROM quiz_record WHERE unit=?",
             arrayOf(unit.toString())
         ).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
+    }
 
     /**
      * 某一专题关卡「全对通关」的次数。
@@ -529,42 +591,46 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
      * `total > 0` 不能省：题库异常时可能写入 total=0 的记录，
      * 那样 correct=total=0 会被当成一次全对，成就白送。
      */
-    fun quizPerfectCountOfUnit(unit: Int): Int =
-        readableDatabase.rawQuery(
+    fun quizPerfectCountOfUnit(unit: Int): Int = reading(0) { db ->
+        db.rawQuery(
             "SELECT COUNT(*) FROM quiz_record WHERE unit=? AND total>0 AND correct=total",
             arrayOf(unit.toString())
         ).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
+    }
 
     /** 打过哪些专题关卡（返回出现过的 unit 范围值集合） */
     fun quizPlayedUnits(units: Collection<Int>): Set<Int> {
         if (units.isEmpty()) return emptySet()
         val placeholders = units.joinToString(",") { "?" }
         val args = units.map { it.toString() }.toTypedArray()
-        val found = HashSet<Int>()
-        readableDatabase.rawQuery(
-            "SELECT DISTINCT unit FROM quiz_record WHERE unit IN ($placeholders)",
-            args
-        ).use { c ->
-            while (c.moveToNext()) found.add(c.getInt(0))
+        return reading(emptySet()) { db ->
+            val found = HashSet<Int>()
+            db.rawQuery(
+                "SELECT DISTINCT unit FROM quiz_record WHERE unit IN ($placeholders)",
+                args
+            ).use { c ->
+                while (c.moveToNext()) found.add(c.getInt(0))
+            }
+            found
         }
-        return found
     }
 
-    fun quizTotalMs(): Long =
-        readableDatabase.rawQuery("SELECT SUM(duration_ms) FROM quiz_record", null).use {
+    fun quizTotalMs(): Long = reading(0L) { db ->
+        db.rawQuery("SELECT SUM(duration_ms) FROM quiz_record", null).use {
             if (it.moveToFirst()) it.getLong(0) else 0L
         }
+    }
 
     // ---------- 成就 ----------
 
-    fun achievements(): Map<String, Long> {
+    fun achievements(): Map<String, Long> = reading(emptyMap()) { db ->
         val map = HashMap<String, Long>()
-        readableDatabase.rawQuery("SELECT code,unlocked_ts FROM achievement", null).use { c ->
+        db.rawQuery("SELECT code,unlocked_ts FROM achievement", null).use { c ->
             while (c.moveToNext()) map[c.getString(0)] = c.getLong(1)
         }
-        return map
+        map
     }
 
     /**
@@ -588,10 +654,11 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
 
     // ---------- 通用 meta ----------
 
-    fun getMeta(key: String, def: String = "0"): String =
-        readableDatabase.rawQuery("SELECT v FROM app_meta WHERE k=?", arrayOf(key)).use {
+    fun getMeta(key: String, def: String = "0"): String = reading(def) { db ->
+        db.rawQuery("SELECT v FROM app_meta WHERE k=?", arrayOf(key)).use {
             if (it.moveToFirst()) it.getString(0) ?: def else def
         }
+    }
 
     fun setMeta(key: String, value: String) {
         val cv = ContentValues().apply {
@@ -650,3 +717,20 @@ private fun Cursor.toWordState(): WordState = WordState(
     reps = getInt(7),
     intervalDays = getInt(8)
 )
+
+/**
+ * 学习记录库的可用性，见 [UserDb.status]。
+ *
+ * 与 [WordbookStatus] 的差别：词库可以重拷，学习记录不可以 ——
+ * 所以这里**没有** RECOVERED 这一档，也不做任何自动修复。
+ */
+enum class UserDbStatus {
+    /** 正常 */
+    OK,
+
+    /** 库文件损坏（malformed / not a database / 磁盘 IO 失败）：唯一出路是从备份恢复 */
+    CORRUPT,
+
+    /** 其它读失败（权限、被占用等）：可以稍后再试 */
+    UNAVAILABLE
+}

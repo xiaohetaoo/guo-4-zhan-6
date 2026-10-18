@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -56,6 +57,7 @@ import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AchievementBadge
 import com.hdu.cetvocab.ui.components.AchievementDetailDialog
 import com.hdu.cetvocab.ui.components.AppCard
+import com.hdu.cetvocab.ui.components.HitArea
 import com.hdu.cetvocab.ui.components.IconChevronRight
 import com.hdu.cetvocab.ui.components.IconFlame
 import com.hdu.cetvocab.ui.components.SectionTitle
@@ -208,7 +210,15 @@ fun ProfileScreen(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable(role = Role.Button) { onOpenAchievements() }
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                /*
+                                 * 命中区必须补到 48dp 高。原先只有 labelMedium 行高
+                                 * （约 16sp）+ vertical 2dp ≈ 20dp —— 是 K13 同批漏掉的一处，
+                                 * 也是全应用里最矮的可点区，手指极易点空。
+                                 * 用 sizeIn 撑起高度，两侧内边距由 6dp 收到 4dp 补回宽度，
+                                 * 文字仍贴着卡片右缘，版式不动。
+                                 */
+                                .sizeIn(minHeight = 48.dp)
+                                .padding(horizontal = 4.dp),
                         ) {
                             Text(
                                 text = "全部",
@@ -309,25 +319,29 @@ private fun IconBox(onClick: () -> Unit) {
     // 否则 TalkBack 只会念出一个无名的「按钮」。
     val settingsLabel = stringResource(R.string.title_settings)
     val interaction = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .springPress(interaction, pressedScale = 0.88f)
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                role = Role.Button,
-                onClick = onClick
-            )
-            .semantics { contentDescription = settingsLabel },
-        contentAlignment = Alignment.Center
+    // 40dp 的芯片本身够大，但 Material 的触摸目标底线是 48dp（K13 同批漏了这里）。
+    // 用 HitArea 把命中区补到 48dp 且 align=CenterEnd：多出的 8dp 只朝行内那一侧长，
+    // 齿轮右缘仍停在原来的 16dp 边距上，版式一个像素都不动。
+    HitArea(
+        onClick = onClick,
+        interaction = interaction,
+        min = 48.dp,
+        align = Alignment.CenterEnd,
+        contentDescription = settingsLabel
     ) {
-        GearIcon(
-            modifier = Modifier.size(21.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .springPress(interaction, pressedScale = 0.88f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            GearIcon(
+                modifier = Modifier.size(21.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

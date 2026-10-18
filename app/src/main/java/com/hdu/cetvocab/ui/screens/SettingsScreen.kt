@@ -23,11 +23,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -100,7 +102,19 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     // 清空必须发生在 collectAsState **之前**，所以放在 remember 的初始化块里而不是
     // 页尾的 LaunchedEffect：collectAsState 拿 StateFlow 的当前值当组合初值，
     // LaunchedEffect 要等这一帧组合完才跑，于是过期成功框会先显示一帧再消失。
-    remember { vm.consumeFileDone() to vm.consumeFileError() }
+    //
+    // wordbookMismatch 也必须在这里一并丢掉：它**不会**被任何 consume 自动清空，
+    // 而恢复失败/不一致的结果现在走全局 notify（见 AppViewModel.restoreBackup），
+    // 页面级这个弹框若留着，用户几天后再进设置页会凭空看到「这份备份来自另一版词库」。
+    //
+    // 注意必须**有非 Unit 的返回值**：`remember { … }` 返回 Unit 会被 lint 判成错误
+    // （RememberReturnType）—— remember 在组合期执行，只在里面做副作用而不产出值，
+    // 正是该规则要拦的写法。这里借返回值把三次 consume 串起来，
+    // 值本身不参与后续逻辑（真正要用的是下面两个 collectAsState）。
+    remember {
+        vm.consumeFileDone()
+        vm.consumeFileError() to vm.dismissWordbookMismatch()
+    }
     val fileDone by vm.fileDone.collectAsState()
     val fileError by vm.fileError.collectAsState()
     // 有文件任务在跑时把四行禁用：连点会并发写盘，备份名只到秒，
@@ -113,12 +127,15 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     // 备份与当前词库不是同一版时，由数据层抛出、这里负责问用户一句
     val wordbookMismatch by vm.wordbookMismatch.collectAsState()
 
-    fun copyPath(path: String) {
+    /** 复制路径。返回是否真的复制成功 —— 取不到剪贴板服务时要让调用方说一句 */
+    fun copyPath(path: String): Boolean {
         // getSystemService 的返回值声明为 @Nullable，个别 ROM 上剪贴板服务会取不到；
-        // 直接 as ClipboardManager 就是 NPE 崩溃，这里安全转换并安静跳过。
+        // 直接 as ClipboardManager 就是 NPE 崩溃，这里安全转换并如实返回失败。
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            ?: return
-        cm.setPrimaryClip(ClipData.newPlainText("path", path))
+            ?: return false
+        return runCatching {
+            cm.setPrimaryClip(ClipData.newPlainText("path", path))
+        }.isSuccess
     }
 
     fun pickRestore() {
@@ -131,7 +148,11 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
         AppTopBar(title = "设置", onBack = onBack)
 
         LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            // top 与首页 / 「我的」保持一致（都是 14dp）：此前缺了 top，
+            // 首卡紧贴顶栏，切页时肉眼可见地「跳一下」。
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // ---------- 学习计划 ----------
@@ -242,6 +263,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                         role = Role.RadioButton,
                                         onClick = { vm.setThemeMode(mode) }
                                     )
+                                    // 芯片高度从 36dp（labelMedium 行高 + 10dp×2）补到 48dp：
+                                    // 它是 K13 同批漏掉的一处，触摸目标底线是 48dp。
+                                    // 多出的高度由 sizeIn 撑起、文字仍居中，横向版式不变。
+                                    .sizeIn(minHeight = 48.dp)
                                     .padding(vertical = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -391,7 +416,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     )
                     Spacer(Modifier.height(12.dp))
 
-                    val simpleChar = if (state.stage == WordDb.STAGE_CET6) "六" else "四"
+                    // 两个预览选项里的字是「选了之后会变成什么」，所以读用户当前级别；
+                    // 而下面那句「当前桌面显示」讲的是**实际生效**的图标，字必须来自
+                    // 真实 alias（见 desktopStage）—— 两者刻意用不同的来源。
+                    val optionChar = if (state.stage == WordDb.STAGE_CET6) "六" else "四"
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         IconOption(
                             modifier = Modifier.weight(1f),
@@ -425,6 +453,16 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                      */
                     val desktop = state.desktopIconStyle ?: state.iconStyle
                     val pending = desktop != state.iconStyle
+                    /*
+                     * 「简洁图标「四/六」」里的字必须来自**实际生效**的 alias
+                     * （state.desktopIconStage），不能读用户当前选择的 state.stage：
+                     * 图标要到 onStop 才落地，「简洁图标 + 四级 → 回首页切六级 →
+                     * 立刻进设置页」这个序列里，读 state.stage 会写「六」，
+                     * 而桌面此刻仍是「四」—— 又是「设置页显示旧值」那一类。
+                     * 读不到实际状态（null）时退回按选择显示，不猜。
+                     */
+                    val desktopStage = state.desktopIconStage ?: state.stage
+                    val simpleChar = if (desktopStage == WordDb.STAGE_CET6) "六" else "四"
                     Text(
                         text = when {
                             pending && state.iconStyle == LauncherIcons.STYLE_SIMPLE ->
@@ -433,7 +471,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                 "桌面图标待切换：现在是简洁图标，回到桌面后变回书本图标"
                             state.iconStyle == LauncherIcons.STYLE_SIMPLE ->
                                 "当前桌面显示：简洁图标「$simpleChar」（${
-                                    WordDb.stageLabel(state.stage)
+                                    WordDb.stageLabel(desktopStage)
                                 }）"
                             else -> "当前桌面显示：默认书本图标"
                         },
@@ -502,7 +540,35 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
             // ---------- 数据管理 ----------
             item {
                 AppCard(color = LocalAppColors.current.cardRose) {
-                    SectionTitle(text = "数据管理", accent = LocalAppColors.current.danger)
+                    SectionTitle(
+                        text = "数据管理",
+                        accent = LocalAppColors.current.danger,
+                        trailing = {
+                            /*
+                             * 进行中必须有明确反馈。此前唯一的表现是「四行变半透明、点不动」，
+                             * 而备份 1 万条 word_state + study_log 要跑几秒 ——
+                             * 用户看到按钮变灰会以为卡死或操作被吃掉，于是重复点击（无效），
+                             * 或者去点同一张卡里那张红色的「清空全部学习数据」。
+                             * 这里给一个转圈 + 一行状态文案，配合下面各行的禁用，
+                             * 让「正在忙」这件事说不出口也能看懂。
+                             */
+                            if (fileBusy) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = LocalAppColors.current.danger
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "处理中…",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    )
                     Spacer(Modifier.height(10.dp))
                     ActionRow(
                         title = "导出学习记录（CSV）",
@@ -538,7 +604,17 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(LocalAppColors.current.danger.copy(alpha = 0.10f))
-                            .clickable(role = Role.Button) { showReset = true }
+                            /*
+                             * 这一行必须和上面四行一样受 fileBusy 约束。
+                             * 它是设置页里最危险的操作，却偏偏是唯一没有 enabled 的：
+                             * 备份/恢复跑到一半（界面只有变灰、没有任何进度）时，
+                             * 用户很容易以为卡死、转而来点这张红色的清空卡。
+                             * 两个写操作并发没有跨存储事务，会留下「数据是备份的、
+                             * 设置被清成默认」这类半成品状态。
+                             * 变灰用 alpha 与 ActionRow 保持同一套观感。
+                             */
+                            .alpha(if (fileBusy) 0.42f else 1f)
+                            .clickable(enabled = !fileBusy, role = Role.Button) { showReset = true }
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -611,8 +687,9 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
         )
     }
 
-    // 导出/备份成功：展示绝对路径 + 复制路径
-    fileDone?.let { (title, path) ->
+    // 导出/备份成功：展示绝对路径 + 复制路径 + 分享出去
+    fileDone?.let { done ->
+        val (title, path, file) = done
         AlertDialog(
             onDismissRequest = { vm.consumeFileDone() },
             title = { Text(title) },
@@ -629,13 +706,38 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    Spacer(Modifier.height(10.dp))
+                    /*
+                     * 把「为什么还要一个分享按钮」写在界面上：
+                     * Android 11+ 起 Android/data 在系统文件 App 与 USB MTP 里都不可见，
+                     * 用户照着路径去文件管理器里找是找不到的。
+                     */
+                    Text(
+                        text = "Android 11 起系统文件管理器看不到这个目录，想拿到电脑上，" +
+                            "请用下面的「分享到…」发送出去。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             },
             confirmButton = {
-                TextButton(onClick = { copyPath(path) }) { Text(stringResource(R.string.action_copy_path)) }
+                TextButton(onClick = { vm.shareFile(file, title) }) {
+                    Text("分享到…")
+                }
             },
             dismissButton = {
-                TextButton(onClick = { vm.consumeFileDone() }) { Text(stringResource(R.string.action_ok)) }
+                Row {
+                    TextButton(onClick = {
+                        // 复制成功要给一句反馈：剪贴板服务取不到时 copyPath 是静默返回的，
+                        // 而此前点完按钮界面毫无变化，用户无法判断是否复制成功、通常连点几次。
+                        val ok = copyPath(path)
+                        vm.toast(if (ok) "路径已复制" else "这个设备取不到剪贴板服务")
+                        vm.consumeFileDone()
+                    }) { Text(stringResource(R.string.action_copy_path)) }
+                    TextButton(onClick = { vm.consumeFileDone() }) {
+                        Text(stringResource(R.string.action_ok))
+                    }
+                }
             }
         )
     }

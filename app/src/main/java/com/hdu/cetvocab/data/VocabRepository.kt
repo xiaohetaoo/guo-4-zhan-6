@@ -67,6 +67,28 @@ class VocabRepository(context: Context) {
                 "重新安装本应用即可恢复，学习记录不会丢。"
         }
 
+    /**
+     * 学习记录库（user_data.db）不可用时要说给用户听的一句话，正常时为 null。
+     *
+     * 与 [wordbookProblem] 是同一套设计，但后果更重：学习记录**不可再生**，
+     * 损坏后唯一的出路是从备份恢复。而它的读方法遍布首页 / 词库 / 我的三条刷新链路
+     * （都在 AppRoot 的 refreshAll 里），不降级就会变成
+     * 「每次冷启动都崩，用户只能清数据」—— 正是 WordDb 注释点名过的那个病。
+     *
+     * 文案要说清两件事：① 现在数据读不出来，不代表真的没了；
+     * ② 正确动作是「从备份恢复」，**不是**「清空数据」（那才会真的抹掉它）。
+     */
+    val userDataProblem: String?
+        get() = when (userDb.status) {
+            UserDbStatus.OK -> null
+            UserDbStatus.CORRUPT ->
+                "学习记录数据库读不出来，进度与成绩暂时看不到（数据文件本身可能还在）。" +
+                    "请勿清空数据 —— 先到「设置→恢复数据」用之前导出的备份恢复；" +
+                    "若没有备份，可联系开发者协助导出。"
+            UserDbStatus.UNAVAILABLE ->
+                "学习记录暂时读不出来，稍后重试即可。"
+        }
+
     var stage: Int
         get() = prefs.getInt(KEY_STAGE, WordDb.STAGE_CET4)
         set(value) = prefs.edit().putInt(KEY_STAGE, value).apply()
@@ -192,7 +214,20 @@ class VocabRepository(context: Context) {
             intervalDays = when (reps) {
                 1 -> 1
                 2 -> 6
+                /*
+                 * 必须封顶。ease 上限 2.8、逐次答对时间隔按 ×2.5~2.8 复利增长：
+                 * reps=22 已到 5.5 亿天、reps=23 到 13.8 亿天，
+                 * 而 reps=24 算出 34.6 亿天 —— 超过 Int.MAX（21.4 亿）。
+                 * `Math.round(...)` 返回 Long，`.toInt()` 只取低 32 位，
+                 * 于是 3,464,508,000 截断成 1，间隔从「三百多万年」突然掉回「1 天」，
+                 * 那个词重新变成每天复习。
+                 *
+                 * 实际要连续答对同一个词 24 次、且每次都在到期时刚好答对才够得着，
+                 * 几乎不可达；但 intervalDays 是 INTEGER 列，
+                 * 正确性不该依赖「用户活不到那时候」。十年已经远超任何真实学习周期。
+                 */
                 else -> maxOf(1, Math.round(s.intervalDays * s.ease).toInt())
+                    .coerceAtMost(MAX_INTERVAL_DAYS)
             }
         }
         // SM-2 难度因子更新公式
@@ -519,10 +554,22 @@ class VocabRepository(context: Context) {
      * 若开局后进程被杀、恢复时用同一颗种子再查一次表，题目会比原来少几道，
      * 快照里存的「答到第几题、多少分」就全部对不上了。
      * 排序沿用 [UserDb.quizWrongEntries] 的「错得多 → 错得早」，上限 [WRONG_REDO_LIMIT] 题。
+     *
+     * **必须先剔除孤儿行再截取前 N 条。** 错题集里可能留着词库更新后已不存在的
+     * word_id（旧词表答错的题），而排序是按「错得多」排的，孤儿行若挤在前 20 名里，
+     * 出题时会被 `byId[wordId]` 查不到而静默丢弃 —— 结果是排行榜写着「待重做 20 题」，
+     * 这一局却只出 13 道。恢复侧早就做了这道过滤（BackupManager 的 validIds），
+     * 出题侧此前漏了。
      */
-    fun wrongRedoRefs(): String =
-        userDb.quizWrongEntries(stage, WRONG_REDO_LIMIT)
+    fun wrongRedoRefs(): String {
+        // 取本级全部合法 id（含两个级别，因为错题按 stage 分表存，但词条可能跨级）
+        val valid = wordDb.idsOfStage(WordDb.STAGE_CET4) + wordDb.idsOfStage(WordDb.STAGE_CET6)
+        val validSet = valid.toHashSet()
+        return userDb.quizWrongEntries(stage, WRONG_REDO_LIMIT)
+            // 孤儿行直接跳过：它已经出不了题，不该占用名额
+            .filter { it.wordId in validSet }
             .joinToString(",") { "${it.kind}:${it.wordId}" }
+    }
 
     /**
      * 按冻结下来的 refs 出重做题。
@@ -551,8 +598,19 @@ class VocabRepository(context: Context) {
         }
     }
 
-    /** 指定级别的待重做错题数 */
-    fun quizWrongCount(challengeStage: Int): Int = userDb.quizWrongCount(challengeStage)
+    /**
+     * 指定级别的待重做错题数。
+     *
+     * 与 [wrongRedoRefs] 同一口径：**剔除词库更新后已不存在的孤儿行**。
+     * 否则界面会显示「待重做 20 题」而实际只出得了 13 道 —— 用户没法理解这个差。
+     */
+    fun quizWrongCount(challengeStage: Int): Int {
+        val valid = wordDb.idsOfStage(WordDb.STAGE_CET4) + wordDb.idsOfStage(WordDb.STAGE_CET6)
+        if (valid.isEmpty()) return userDb.quizWrongCount(challengeStage)
+        val validSet = valid.toHashSet()
+        return userDb.quizWrongEntries(challengeStage, Int.MAX_VALUE)
+            .count { it.wordId in validSet }
+    }
 
     /**
      * 闯关每答一题维护错题集：答错进集，答对出集。
@@ -907,5 +965,12 @@ class VocabRepository(context: Context) {
 
         /** 最高等级「精通」（levelLabel 的 5 档）：达到该档的词不再占用错词本 */
         private const val LEVEL_EXPERT = 5
+
+        /**
+         * 复习间隔上限（天）。见 [answerWord] 里对 Int 溢出的说明：
+         * 不封顶的话第 24 次连续答对会让 intervalDays 溢出成 1 天。
+         * 取十年是为了「足够大、任何真实学习周期都用不到」。
+         */
+        private const val MAX_INTERVAL_DAYS = 3650
     }
 }

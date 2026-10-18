@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="warm_primary">#FFE2703A</color>
+    <!--
+      warm_primary 已移除：它从未被任何布局或代码引用
+      （主色在 ui/theme/Color.kt 的 WarmPrimary 里，由 Compose 侧使用）。
+      留着只会让 lint 每次报一条 UnusedResources，也容易让后来者以为
+      改这里能影响应用配色。
+    -->
     <color name="warm_background">#FFFFF8F2</color>
     <color name="warm_surface">#FFFFFFFF</color>
     <color name="warm_on_background">#FF3A2A20</color>

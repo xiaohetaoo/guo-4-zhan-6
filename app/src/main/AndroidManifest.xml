@@ -24,11 +24,31 @@
     <application
         android:name=".CetVocabApp"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.CetVocab">
+
+        <!--
+          导出/备份文件的分享通道，见 res/xml/file_paths.xml。
+
+          没有它，导出到 Android/data 的 CSV 在 Android 11+ 上取不出手机：
+          系统「文件」App 与 USB MTP 都看不到 Android/data，
+          第三方文件管理器也被 Scoped Storage 挡住。
+          有了它就能给出 content:// URI，交给系统分享面板发送到电脑或云端盘。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!--
           真正的 Activity 不再直接挂在桌面入口上：

@@ -69,8 +69,10 @@
     <!-- 设置 / 数据管理 -->
     <string name="reset_confirm_title">确认清空全部数据？</string>
     <!-- 列举必须和 VocabRepository.resetAll() 的真实删除范围一致：
-         它走 prefs.edit().clear()，界面动效开关同样会被清掉，之前漏了这一项。 -->
-    <string name="reset_confirm_message">学习进度、闯关成绩、成就记录与应用设置（级别、每日目标、语速、界面动效、图标与明暗模式）都会被删除，且无法恢复。</string>
+         它走 prefs.edit().clear()，界面动效开关同样会被清掉，之前漏了这一项。
+         自动朗读（auto_speak）与答题音效（sound_enabled）也在这个 prefs 文件里，
+         一并列出 —— 少写两项就是告知不实。 -->
+    <string name="reset_confirm_message">学习进度、闯关成绩、成就记录与应用设置（级别、每日目标、语速、自动朗读、界面动效、答题音效、图标与明暗模式）都会被删除，且无法恢复。</string>
     <string name="action_reset_confirm">确认清空</string>
     <string name="restore_pick_title">选择要恢复的备份</string>
     <string name="restore_confirm_title">确认恢复数据？</string>

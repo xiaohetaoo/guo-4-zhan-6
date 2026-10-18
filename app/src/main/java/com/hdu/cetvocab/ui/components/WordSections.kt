@@ -306,7 +306,12 @@ fun LevelDots(level: Int, modifier: Modifier = Modifier, describe: Boolean = tru
                     .size(9.dp)
                     .clip(CircleShape)
                     .background(
-                        if (i < lit) LocalAppColors.current.success else MaterialTheme.colorScheme.outlineVariant
+                        if (i < lit) LocalAppColors.current.success
+                        // 未点亮的格子必须看得见：这个组件的全部信息量就在
+                        // 「亮了几格 / 还剩几格」的对比上。原先用的是 outlineVariant
+                        // （浅色 #F2E2D7、深色 #3A322B），在卡片底上只有 1.1–1.3:1，
+                        // 空格与底几乎融为一体。改用专门的 levelDotOff（≥3:1）。
+                        else LocalAppColors.current.levelDotOff
                     )
             )
         }

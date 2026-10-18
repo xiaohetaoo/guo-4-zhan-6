@@ -88,7 +88,11 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit, onStartRedo: () -> U
                 if (wrongCount > 0) {
                     TopicCard(
                         title = "闯关错题重做",
-                        desc = "待重做${wrongCount}题，答对即移出错题集。可反复重做，" +
+                        // 「当前级别」必须写明：错题集只按当前级别统计
+                        // （quizWrongCount(repo.stage)），而下面的榜单与顶部统计
+                        // 是全表口径（两个级别都算）。不写清楚，四级用户会看到
+                        // 一堆六级成绩、却找不到那批六级错题的重做入口，以为错题丢了。
+                        desc = "当前级别待重做${wrongCount}题，答对即移出错题集。可反复重做，" +
                             "本局成绩不计入排行榜与成就",
                         container = LocalAppColors.current.cardPeach,
                         actionLabel = "开始重做",
@@ -220,4 +224,23 @@ private fun RankRow(rank: Int, record: QuizRecord) {
 private val TS_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault())
 
-private fun formatTs(ts: Long): String = TS_FORMATTER.format(Instant.ofEpochMilli(ts))
+/** 跨年记录用这个格式（见 [formatTs]） */
+private val TS_FORMATTER_WITH_YEAR: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneId.systemDefault())
+
+/**
+ * 时间显示：当年的成绩只写「月-日 时:分」，跨年的补上年份。
+ *
+ * 排行榜是「历次成绩」，跨年很常见；只写 MM-dd 会让去年的记录和今年的
+ * 显示成同一种样子，用户无法判断高分是哪一年刷出来的。
+ */
+private fun formatTs(ts: Long): String {
+    val zone = ZoneId.systemDefault()
+    val then = Instant.ofEpochMilli(ts).atZone(zone)
+    val now = java.time.ZonedDateTime.now(zone)
+    return if (then.year == now.year) {
+        TS_FORMATTER.format(then)
+    } else {
+        TS_FORMATTER_WITH_YEAR.format(then)
+    }
+}

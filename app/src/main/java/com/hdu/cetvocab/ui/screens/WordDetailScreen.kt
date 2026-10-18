@@ -45,6 +45,7 @@ import com.hdu.cetvocab.ui.AppViewModel
 import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.AppTopBar
 import com.hdu.cetvocab.ui.components.ExampleBlock
+import com.hdu.cetvocab.ui.components.HitArea
 import com.hdu.cetvocab.ui.components.IconHeart
 import com.hdu.cetvocab.ui.components.LevelDots
 import com.hdu.cetvocab.ui.components.MnemonicBlock
@@ -112,32 +113,44 @@ fun WordDetailScreen(
                     if (shownFav) R.string.cd_fav_remove else R.string.cd_fav_add
                 )
                 val favInteraction = remember { MutableInteractionSource() }
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .springPress(favInteraction, pressedScale = 0.86f)
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(if (shownFav) LocalAppColors.current.cardAmber else MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable(
-                            interactionSource = favInteraction,
-                            indication = null,
-                            enabled = favLoaded,
-                            role = Role.Button
-                        ) {
-                            word?.let {
-                                fav = !fav
-                                vm.toggleFav(it)
-                            }
+                /*
+                 * 38dp 的芯片视觉不变，命中区补到 48dp（K13 同批漏了这里）。
+                 * align=CenterEnd：多出的 10dp 只朝行内那一侧长，
+                 * 心形右缘仍停在原来的 16dp 边距上，顶栏版式不动。
+                 */
+                HitArea(
+                    onClick = {
+                        // 与原先的 enabled = favLoaded 等价：状态还没读出来时不响应，
+                        // 否则会先按默认的「未收藏」翻转一次，把真实收藏态写反。
+                        if (!favLoaded) return@HitArea
+                        word?.let {
+                            fav = !fav
+                            vm.toggleFav(it)
                         }
-                        .semantics { contentDescription = favLabel },
-                    contentAlignment = Alignment.Center
+                    },
+                    interaction = favInteraction,
+                    min = 48.dp,
+                    align = Alignment.CenterEnd,
+                    contentDescription = favLabel
                 ) {
-                    IconHeart(
-                        modifier = Modifier.size(19.dp),
-                        filled = shownFav,
-                        color = if (shownFav) LocalAppColors.current.warning
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .springPress(favInteraction, pressedScale = 0.86f)
+                            .clip(RoundedCornerShape(13.dp))
+                            .background(
+                                if (shownFav) LocalAppColors.current.cardAmber
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconHeart(
+                            modifier = Modifier.size(19.dp),
+                            filled = shownFav,
+                            color = if (shownFav) LocalAppColors.current.warning
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         )

@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  默认图标（打开的书本 + 灵感火花）。
+
+  修复点：此前缺 <monochrome>，导致 Android 13+ 的「主题图标」对本图标不生效 ——
+  而同目录的 ic_launcher_si.xml / ic_launcher_liu.xml 都带了 monochrome，
+  于是同一台设备上换个图标风格，主题化行为不一致。
+
+  为什么不能直接复用 @drawable/ic_launcher_foreground：
+  它是**多色**矢量（白色 / 米白 / 浅金 / 金四色），而 monochrome 必须是**单色**
+  （系统只取 alpha 当形状再套主题色）。直接复用会把整块前景当成实心形状，
+  书本与火花的层次全丢。所以另出了一版单色前景 ic_launcher_monochrome。
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>

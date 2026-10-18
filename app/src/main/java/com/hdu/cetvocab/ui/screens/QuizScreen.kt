@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -780,8 +781,31 @@ private fun QuizPlay(
  * 选项行的读屏文案：把「第几项」和内容合成一句话。
  * 不加的话 TalkBack 会把 A、选项文本、勾选框拆成几个节点分别播报，听感支离破碎。
  */
-private fun optionLabel(index: Int, text: String): String =
-    "选项${('A'.code + index).toChar()}：${text}"
+/**
+ * 选项的朗读文本。
+ *
+ * 揭晓之后必须把对错念出来：行上的对错只由底色 + 两个无描述的自绘图标表达，
+ * 视障用户听完「选项 A：apple，已选中」无从得知自己答对没有 ——
+ * 而闯关的核心反馈正是这一句。多选的「漏选」也在这里补齐
+ * （漏选是独立的一行文字，会被行级 contentDescription 顶掉）。
+ */
+private fun optionLabel(
+    index: Int,
+    text: String,
+    revealed: Boolean = false,
+    isAnswer: Boolean = false,
+    selected: Boolean = false
+): String {
+    val base = "选项${('A'.code + index).toChar()}：$text"
+    if (!revealed) return base
+    return when {
+        // 多选里「应选但没选」是漏选，措辞要与「选错了」分开
+        isAnswer && !selected -> "$base，正确答案，未选中（漏选）"
+        isAnswer -> "$base，正确答案"
+        selected -> "$base，选错了"
+        else -> base
+    }
+}
 
 private fun isSpellingCorrect(state: QuizUiState, q: QuizQuestion): Boolean =
     state.typed.trim().equals(q.word.word.trim(), ignoreCase = true)
@@ -830,15 +854,17 @@ private fun ChoiceQuestion(
             )
         }
         Spacer(Modifier.height(20.dp))
-        q.options.forEachIndexed { i, opt ->
-            OptionRow(
-                index = i,
-                text = opt,
-                selected = state.selected == i,
-                isAnswer = i == q.correctIndex,
-                revealed = state.revealed,
-                onClick = { vm.selectOption(i) }
-            )
+        Column(modifier = Modifier.selectableGroup()) {
+            q.options.forEachIndexed { i, opt ->
+                OptionRow(
+                    index = i,
+                    text = opt,
+                    selected = state.selected == i,
+                    isAnswer = i == q.correctIndex,
+                    revealed = state.revealed,
+                    onClick = { vm.selectOption(i) }
+                )
+            }
         }
     }
 }
@@ -900,14 +926,16 @@ private fun OptionRow(
             .background(container)
             // 这一行此前只是「可点击」，TalkBack 读不出来是第几个选项、有没有选中。
             // 用 selectable + RadioButton 角色补齐角色与状态，并把选项文本并进
-            // contentDescription，让整行一次读全。
+            // contentDescription，让整行一次读全；揭晓后还把对错一并念出来。
             .selectable(
                 selected = selected,
                 enabled = !revealed,
                 role = Role.RadioButton,
                 onClick = onClick
             )
-            .semantics { contentDescription = optionLabel(index, text) }
+            .semantics {
+                contentDescription = optionLabel(index, text, revealed, isAnswer, selected)
+            }
             .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -988,15 +1016,17 @@ private fun ConfusableQuestion(
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(20.dp))
-        q.options.forEachIndexed { i, opt ->
-            OptionRow(
-                index = i,
-                text = opt,
-                selected = state.selected == i,
-                isAnswer = i == q.correctIndex,
-                revealed = state.revealed,
-                onClick = { vm.selectOption(i) }
-            )
+        Column(modifier = Modifier.selectableGroup()) {
+            q.options.forEachIndexed { i, opt ->
+                OptionRow(
+                    index = i,
+                    text = opt,
+                    selected = state.selected == i,
+                    isAnswer = i == q.correctIndex,
+                    revealed = state.revealed,
+                    onClick = { vm.selectOption(i) }
+                )
+            }
         }
     }
 }
@@ -1045,15 +1075,19 @@ private fun TranslationQuestion(
             lineHeight = 28.sp
         )
         Spacer(Modifier.height(20.dp))
-        q.options.forEachIndexed { i, opt ->
-            MultiOptionRow(
-                index = i,
-                text = opt,
-                checked = i in state.selectedSet,
-                isAnswer = i in q.answerSet,
-                revealed = state.revealed,
-                onClick = { vm.toggleTranslationOption(i) }
-            )
+        // selectableGroup：把这一组选项标成一个整体，TalkBack 才会播报
+        // 「4 项中的第 N 项」；缺了它只能一项一项读、用户不知道还有几项。
+        Column(modifier = Modifier.selectableGroup()) {
+            q.options.forEachIndexed { i, opt ->
+                MultiOptionRow(
+                    index = i,
+                    text = opt,
+                    checked = i in state.selectedSet,
+                    isAnswer = i in q.answerSet,
+                    revealed = state.revealed,
+                    onClick = { vm.toggleTranslationOption(i) }
+                )
+            }
         }
     }
 }
@@ -1110,7 +1144,12 @@ private fun MultiOptionRow(
                 role = Role.Checkbox,
                 onClick = onClick
             )
-            .semantics { contentDescription = optionLabel(index, text) }
+            .semantics {
+                // 与 OptionRow 同口径：揭晓后把对错（含「漏选」）一并念出来。
+                // 「漏选」是行内独立的一行文字，会被行级 contentDescription 顶掉，
+                // 所以必须在这里补齐，否则读屏用户听不到这个最有指导性的提示。
+                contentDescription = optionLabel(index, text, revealed, isAnswer, checked)
+            }
             .padding(horizontal = 14.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1228,7 +1267,13 @@ private fun SpellingQuestion(
             placeholder = { Text(stringResource(R.string.hint_input_word)) },
             shape = RoundedCornerShape(16.dp),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { vm.submitSpelling() }),
+            // 与底部「提交答案」按钮共用同一道守卫：空输入不提交。
+            // 此前这里是无条件 vm.submitSpelling()，而按钮那边有 canSubmit 挡着 ——
+            // 聚焦输入框什么都不打、随手按软键盘的「完成」，空格判错、白白废掉一题。
+            // 守卫现在同时做在 VM 的 submitSpelling() 入口上（双保险，两处都不漏）。
+            keyboardActions = KeyboardActions(
+                onDone = { if (state.typed.isNotBlank()) vm.submitSpelling() }
+            ),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                 unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant

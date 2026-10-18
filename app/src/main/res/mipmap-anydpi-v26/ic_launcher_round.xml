@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  默认图标的圆形版本。内容与 ic_launcher.xml 完全一致（自适应图标由系统裁剪形状），
+  同样补上缺失的 <monochrome>，理由见 ic_launcher.xml 的注释。
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>

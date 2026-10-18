@@ -42,8 +42,15 @@ android {
         // v1.4.4 = 第四轮审查修复：备份恢复的孤儿数据保护、闯关结算前等逐题入库落库、
         // 「我的/设置」显示旧级别旧目标、恢复失败后残留的死按钮、小词量字母恢复必然失败、
         // 音效线程回调竞态与音轨泄漏等。
-        versionCode = 46
-        versionName = "1.4.5"
+        // v1.4.6 = 第五轮全量审查的 31 项修复（P1×3 / P2×15 / P3×13）：
+        //   旧局快照幂等（K9 回归）、清空数据的并发闸门与异常保护、
+        //   用户记录库损坏降级（与词库侧对称）、恢复失败改走全局提示、
+        //   app_meta 脏数据不再废掉整次恢复、拼写题空输入守卫、
+        //   孤儿错题不再占用重做名额、浅色主题金属色与熟练度圆点对比度、
+        //   K13 遗漏的 4 处触摸目标、导出可分享（FileProvider）、
+        //   CSV 加 UTF-8 BOM、默认图标补 monochrome、dataExtractionRules 等。
+        versionCode = 47
+        versionName = "1.4.6"
         vectorDrawables { useSupportLibrary = true }
     }
 

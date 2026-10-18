@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  应用私有文件的分享通道。
+
+  解决的问题：导出/备份的文件落在 getExternalFilesDir（即
+  .../Android/data/com.hdu.cetvocab/files/导出/），而 Android 11+ 上
+  Android/data 在系统「文件」App 与 USB MTP 里都不可见，第三方文件管理器
+  也被 Scoped Storage 挡住 —— 用户能拿到一串路径，却**无法把 CSV 取出手机**，
+  「导出拿去电脑分析」这个实际用途直接落空。
+
+  这里用 FileProvider 把应用内部的文件路径暴露成一个 content:// URI，
+  交给系统分享面板（ACTION_SEND）或外部应用（ACTION_VIEW）读取，
+  从而绕开 Android/data 的可见性问题。
+
+  grantUriPermissions + exported=false：URI 授权按次下发，不对外整体暴露目录。
+  cache-path / external-files-path / files-path 三条都声明，
+  因为 baseDir() 在无外部存储时会退回内部私有目录（见 BackupManager.baseDir）。
+-->
+<paths>
+    <!-- 首选落点：getExternalFilesDir(null) -->
+    <external-files-path name="export_ext" path="." />
+    <!-- 无外部存储时的退回落点：context.filesDir -->
+    <files-path name="export_int" path="." />
+    <!-- 需要临时外发的拷贝 -->
+    <cache-path name="export_cache" path="." />
+</paths>

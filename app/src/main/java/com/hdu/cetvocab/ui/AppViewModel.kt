@@ -1,6 +1,8 @@
 package com.hdu.cetvocab.ui
 
 import android.app.Application
+import android.content.Intent
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hdu.cetvocab.CetVocabApp
@@ -199,6 +201,16 @@ data class ProfileUiState(
      * 写「当前桌面显示」，切换失败时那句话就是假的。
      */
     val desktopIconStyle: Int? = null,
+    /**
+     * 桌面**实际生效**的那个简洁图标对应哪个级别（四级 / 六级），读不出来为 null。
+     *
+     * 与 [desktopIconStyle] 配套：后者只区分「默认 / 简洁」两档，
+     * 而简洁档下「四」和「六」是不同的 alias。设置页那句
+     * 「当前桌面显示：简洁图标「六」」必须用它，不能读用户刚选的 [stage] ——
+     * 图标要到 onStop 才落地，「简洁图标 + 四级 → 切六级 → 立刻进设置页」
+     * 这个序列里页面会写「六」而桌面此刻仍是「四」。
+     */
+    val desktopIconStage: Int? = null,
     val themeMode: Int = VocabRepository.THEME_SYSTEM,
     /** 界面动效开关（设置页）。false 时转场、弹簧与按压回弹全部退化为瞬间落位。 */
     val animationsEnabled: Boolean = true,
@@ -514,23 +526,47 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun resetAll() {
+        /*
+         * 与四个文件操作行共用同一把闸门，并且**自己也要挡住并发**。
+         *
+         * 「清空全部学习数据」是设置页里最危险的一行，但此前它是唯一
+         * 不受 [fileBusy] 约束的操作：备份/恢复跑到一半、界面只有变灰没有任何进度，
+         * 用户很容易以为卡死、转而去点那张红色的清空卡。
+         * 两个写操作并发时：DB 侧各自事务串行没问题，可 `resetAll()` 的
+         * `prefs.clear()` 与 restore 的 `prefs.commit()` 分属两个存储、没有跨存储事务，
+         * 最终可能落在「库里是备份的数据、设置被清成默认」这类半成品状态。
+         */
+        if (_fileBusy.value) return
+        _fileBusy.value = true
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { repo.resetAll() }
-            // 一并清掉进行中的学习 / 闯关状态与并发标志，
-            // 否则清空数据后仍可能停在上一次的答题或结算页上。
-            answering = false
-            finishing = false
-            questionStartTs = 0L
-            studyTimerStart = 0L
-            studyTimerCarryMs = 0L
-            studyScreenActive = false
-            quizScreenActive = false
-            _study.value = StudyUiState()
-            _quiz.value = QuizUiState()
-            // prefsFromRepo=true：resetAll 里 prefs.edit().clear() 把设置全恢复成默认，
-            // _profile 里缓存的旧设置必须整体作废，否则各开关显示的还是清空前的状态。
-            refreshAll(prefsFromRepo = true)
-            notify("学习数据已清空")
+            try {
+                // 与 runFileTask / restoreBackup 同构：清空失败也必须说出来，
+                // 此前没有 runCatching，磁盘满或库损坏时异常会直接冒到 viewModelScope
+                // 结束协程（未捕获异常 → 崩溃），而 refreshAll 与成功提示都不会执行，
+                // UI 停在旧状态，用户完全不知道到底清没清。
+                runCatching { withContext(Dispatchers.IO) { repo.resetAll() } }
+                    .onSuccess {
+                        // 一并清掉进行中的学习 / 闯关状态与并发标志，
+                        // 否则清空数据后仍可能停在上一次的答题或结算页上。
+                        answering = false
+                        finishing = false
+                        questionStartTs = 0L
+                        studyTimerStart = 0L
+                        studyTimerCarryMs = 0L
+                        studyScreenActive = false
+                        quizScreenActive = false
+                        quizSnapshotCleared = false
+                        _study.value = StudyUiState()
+                        _quiz.value = QuizUiState()
+                        // prefsFromRepo=true：resetAll 里 prefs.edit().clear() 把设置全恢复成默认，
+                        // _profile 里缓存的旧设置必须整体作废，否则各开关显示的还是清空前的状态。
+                        refreshAll(prefsFromRepo = true)
+                        notify("学习数据已清空")
+                    }
+                    .onFailure { _fileError.value = fileErrorMessage("没能清空数据", it) }
+            } finally {
+                _fileBusy.value = false
+            }
         }
     }
 
@@ -633,11 +669,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 只看 allWords 非空会把上一级别的词表当成当前级别的结果。
         if (_learn.value.stage == stage && _learn.value.allWords.isNotEmpty()) return
         _learn.update { it.copy(allWordsLoading = true, allWords = emptyList()) }
+        /*
+         * 用加载代次判过期，而不是比 `repo.stage`。
+         *
+         * 比 stage 有两个漏洞：① 用户切走再切回来时，早先那次越级加载返回时
+         * `repo.stage` 恰好等于它的 stage，「过期」判定落空、会覆盖新状态；
+         * ② 新一轮加载仍在飞时，这一轮的过期分支可能把**新轮**的 allWordsLoading
+         * 清成 false，于是预览列表闪一下空态，同窗口再点还会重复发一次查询。
+         * 每次加载领一个号，只有「自己那一次」允许清 loading。
+         */
+        val token = ++allWordsLoadToken
         viewModelScope.launch {
             val words = withContext(Dispatchers.IO) { repo.wordDb.wordsOfStage(stage) }
-            // 加载期间用户又切了级别：结果已过期，丢弃而不是覆盖新状态。
-            // 丢弃时也必须把 allWordsLoading 落回 false —— 否则一旦这次过期返回是
-            // 在 refreshLearn 的合并之后到达，全词预览就永久转圈。
+            /*
+             * 过期分支必须区分两种「过期」，否则会漏掉一个永久转圈：
+             * · 有更新的加载在飞（token 已不是自己）→ 什么都不做，loading 归它管；
+             * · 只是级别变了、而没有更新的加载（token 仍是自己，例如用户切了级别
+             *   但没再点「预览全部」）→ 结果作废，但必须由自己把 loading 落回 false，
+             *   否则全词预览会一直转圈。
+             */
+            if (token != allWordsLoadToken) return@launch
             if (repo.stage != stage) {
                 _learn.update { if (it.stage != stage) it.copy(allWordsLoading = false) else it }
                 return@launch
@@ -647,6 +698,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /** 全词预览的加载代次，见 [previewAllWords] */
+    private var allWordsLoadToken = 0
 
     /**
      * 搜索。
@@ -1005,6 +1059,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         finishJob?.cancel()
         finishJob = null
         finishing = false
+        // 新的一局：允许这一局收一次尾（见 quizSnapshotCleared）
+        quizSnapshotCleared = false
         // 开新局前先把「答到一半的那一局」挪个地方存着，别让它无声消失
         preserveInterruptedSession()
         // 每开一局换一个新的会话号：上一局尚未写完的结算结果据此作废
@@ -1099,13 +1155,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!hadSnapshot) _quizSnapshotEpoch.update { it + 1 }
     }
 
+    /**
+     * 本局是否已经收过尾（[clearQuizSnapshot] 已被调用过一次）。
+     *
+     * 必须有这个标志：[clearQuizSnapshot] **不幂等** —— 它把「被本局挤掉的那一局」
+     * 从 [VocabRepository.quizInterruptedSnapshot] 搬回快照位后会把前者置空，
+     * 因此第二次调用时「搬回源」已是 null，照样赋值就会把第一次刚还原出来的旧局写成 null。
+     *
+     * 而这条路径一局里必然走两次：`finishQuiz` 结算成功后走一次（1590），
+     * 用户在结算页按返回/关闭触发 `exitQuiz` 又走一次（1600）。
+     * 第二次于是把 K9 刚保住的旧局抹掉 —— 选关页那张「有一局没打完」的卡片随之消失。
+     *
+     * 每局开局时复位（[openQuiz] / [resumeQuiz]），只允许本局收一次尾。
+     */
+    private var quizSnapshotCleared = false
+
     private fun clearQuizSnapshot() {
+        // 已经收过尾：重复调用是 no-op，不能再去动快照位（见字段说明）
+        if (quizSnapshotCleared) return
+        quizSnapshotCleared = true
         quizSpec = null
         /*
          * 本局结束后，把「被它挤掉的那一局」放回快照位。
-         * 放回来的时机只有这一处：结算页关闭与答题页退出都会走到这里，
-         * 而用户此刻已经不再需要本局的快照，选关页那张「有一局没打完」的卡片
-         * 正好换成更早的那一局。超过 30 分钟窗口则由 peekRestorableQuiz 自己丢弃。
+         * 超过 30 分钟窗口时由 peekRestorableQuiz 自己丢弃。
          */
         repo.quizSessionSnapshot = repo.quizInterruptedSnapshot
         repo.quizInterruptedSnapshot = null
@@ -1219,6 +1291,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             finishJob?.cancel()
             finishJob = null
             finishing = false
+            // 恢复出来的这一局同样只允许收一次尾（见 quizSnapshotCleared）
+            quizSnapshotCleared = false
             quizSession++
             _quiz.value = QuizUiState(
                 active = true,
@@ -1396,6 +1470,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun submitSpelling() {
         val state = _quiz.value
         val question = state.current ?: return
+        /*
+         * 空白输入必须挡住。底部「提交答案」按钮那边有 canSubmit 守着，
+         * 但输入框的 IME「完成」键直接调到这里 —— 两条路径共用同一个入口，
+         * 守卫就必须做在入口上：聚焦输入框什么都不打、随手按一下软键盘的完成，
+         * 空格与答案比较必然不等，这一题就被判错并揭晓（白白废掉一题）。
+         */
+        if (state.typed.isBlank()) {
+            notify("请先输入单词再提交")
+            return
+        }
         val correct = state.typed.trim().equals(question.word.word.trim(), ignoreCase = true)
         applyAnswer(correct, selected = state.selected)
     }
@@ -1536,60 +1620,95 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             else -> 0
         }
         finishJob = viewModelScope.launch {
-            // 等所有逐题写入落库，再去数错题集。见 [answerWrites]。
-            // 放在这里而不是 applyAnswer 里串行：逐题入库本来就该是异步的，
-            // 让它挡住下一题的点击会让答题手感变粘。
-            answerWrites.toList().joinAll()
-            val isRedo = state.isRedo
-            val gained = withContext(Dispatchers.IO) {
-                if (isRedo) {
-                    /*
-                     * 重做局既不写成绩也不评成就。
-                     * 错题可以无限次重做，一旦入库，把同一批题刷到全对就能在排行榜上
-                     * 挂出一个从未真实达到过的满分，「历次成绩」这个口径就被自己毁掉了；
-                     * 成就里还有「单次闯关连对 50 题」这类按局计数的档位，同样会被刷出来。
-                     */
-                    emptyList<AchievementDef>() to null
-                } else {
-                    val record = repo.saveQuizRecord(
-                        // 用开局时记下的级别，而不是 repo.stage 实时值：
-                        // 答题中途切去别的标签改级别，会让入库级别与题目实际级别不一致
-                        stage = state.stage,
-                        unit = state.unit,
-                        mode = "mix",
-                        score = state.score,
-                        total = state.questions.size,
-                        correct = state.correctCount,
-                        maxCombo = state.maxCombo,
-                        durationMs = duration
-                    )
-                    repo.evaluateAchievements(record) to record
+            /*
+             * 结算这一段必须自带异常处理 + finally 复位。
+             *
+             * [finishing] 是 finishQuiz 的幂等标志，但它的复位点此前全在**外部**
+             * （openQuiz / resumeQuiz / exitQuiz），结算协程内部一次都不复位：
+             * `answerWrites.joinAll()` / `saveQuizRecord` / `evaluateAchievements` /
+             * `quizWrongCount` 任一抛异常（数据库损坏、磁盘满），或走到下面
+             * 「会话号已变」的提前 return，都会让 finishing **永久停在 true**。
+             * 而 applyAnswer 里 `if (finishing) return@update s` 会据此把末题的作答
+             * 全部挡掉 —— 界面死在最后一题、结算页永不出现，用户只能点 X 退出，
+             * 且因为依赖那次 IO 是否抛异常而**难以复现**。
+             *
+             * 现在的策略：
+             * · 成功 → 正常写结算态；
+             * · 失败 → 记一句提示，并**仍然把 finished 置起来**，让用户可以继续操作
+             *   （成绩可能没入库，但界面不会卡死；这比「没有结算页」好得多）；
+             * · 无论成败 → finally 里复位 finishing，末题不会永久锁死。
+             */
+            try {
+                // 等所有逐题写入落库，再去数错题集。见 [answerWrites]。
+                // 放在这里而不是 applyAnswer 里串行：逐题入库本来就该是异步的，
+                // 让它挡住下一题的点击会让答题手感变粘。
+                answerWrites.toList().joinAll()
+                val isRedo = state.isRedo
+                val gained = withContext(Dispatchers.IO) {
+                    if (isRedo) {
+                        /*
+                         * 重做局既不写成绩也不评成就。
+                         * 错题可以无限次重做，一旦入库，把同一批题刷到全对就能在排行榜上
+                         * 挂出一个从未真实达到过的满分，「历次成绩」这个口径就被自己毁掉了；
+                         * 成就里还有「单次闯关连对 50 题」这类按局计数的档位，同样会被刷出来。
+                         */
+                        emptyList<AchievementDef>() to null
+                    } else {
+                        val record = repo.saveQuizRecord(
+                            // 用开局时记下的级别，而不是 repo.stage 实时值：
+                            // 答题中途切去别的标签改级别，会让入库级别与题目实际级别不一致
+                            stage = state.stage,
+                            unit = state.unit,
+                            mode = "mix",
+                            score = state.score,
+                            total = state.questions.size,
+                            correct = state.correctCount,
+                            maxCombo = state.maxCombo,
+                            durationMs = duration
+                        )
+                        repo.evaluateAchievements(record) to record
+                    }
                 }
+                // 重做结算要报「错题集还剩几道」，必须等答对的题移出之后再去数
+                val remaining = if (isRedo) {
+                    withContext(Dispatchers.IO) { repo.quizWrongCount(state.stage) }
+                } else {
+                    -1
+                }
+                // 只在本次闯关仍然有效时写入结算态：用户若已点退出，
+                // 状态会被重置为 QuizUiState()，此时再置 finished 就会弹出「幽灵结算页」。
+                // 会话号比对补上另一半：退出后**又开了一局**时 active/finished 都是新局的值，
+                // 单看标志位拦不住，必须确认回写的仍是开局那一局。
+                if (session != quizSession) return@launch
+                _quiz.update { s ->
+                    if (!s.active || s.finished) s
+                    else s.copy(
+                        finished = true,
+                        stars = stars,
+                        lastRecord = gained.second,
+                        newAchievements = gained.first,
+                        remainingWrong = remaining
+                    )
+                }
+                clearQuizSnapshot()
+                refreshHome()
+                refreshProfile()
+            } catch (e: Exception) {
+                // 写库失败不能让界面卡在末题：先把结算页摆出来，再如实说明成绩可能没记上。
+                // 会话号变了（用户已退出/已开新局）时什么都不做，避免幽灵结算页。
+                if (session == quizSession) {
+                    _quiz.update { s ->
+                        if (!s.active || s.finished) s
+                        else s.copy(finished = true, stars = stars)
+                    }
+                    clearQuizSnapshot()
+                    notify("本局成绩可能没能存下来，请稍后在排行榜确认")
+                }
+            } finally {
+                // 复位幂等标志，末题的作答不会再被永久挡掉（见上面的说明）。
+                // 会话已切换时 openQuiz/resumeQuiz/exitQuiz 各自会管理它，这里置 false 无害。
+                finishing = false
             }
-            // 重做结算要报「错题集还剩几道」，必须等答对的题移出之后再去数
-            val remaining = if (isRedo) {
-                withContext(Dispatchers.IO) { repo.quizWrongCount(state.stage) }
-            } else {
-                -1
-            }
-            // 只在本次闯关仍然有效时写入结算态：用户若已点退出，
-            // 状态会被重置为 QuizUiState()，此时再置 finished 就会弹出「幽灵结算页」。
-            // 会话号比对补上另一半：退出后**又开了一局**时 active/finished 都是新局的值，
-            // 单看标志位拦不住，必须确认回写的仍是开局那一局。
-            if (session != quizSession) return@launch
-            _quiz.update { s ->
-                if (!s.active || s.finished) s
-                else s.copy(
-                    finished = true,
-                    stars = stars,
-                    lastRecord = gained.second,
-                    newAchievements = gained.first,
-                    remainingWrong = remaining
-                )
-            }
-            clearQuizSnapshot()
-            refreshHome()
-            refreshProfile()
         }
     }
 
@@ -1608,9 +1727,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // 后者绑定页面生命周期，用户点完「备份数据」立刻返回上一页，协程就会被取消，
     // 磁盘上留下一个写了一半的 JSON —— 它还会出现在 listBackups() 里被当成可恢复的备份。
 
-    /** 导出/备份成功后的结果：标题 -> 文件绝对路径 */
-    private val _fileDone = MutableStateFlow<Pair<String, String>?>(null)
-    val fileDone: StateFlow<Pair<String, String>?> = _fileDone.asStateFlow()
+    /**
+     * 导出/备份成功后的结果：标题 + 文件（路径与 File 都带上）。
+     *
+     * 带上 [File] 是为了「分享到…」：Android 11+ 上 Android/data 在系统文件 App
+     * 与 USB MTP 里都不可见，光给路径用户取不出手机，必须走 FileProvider 分享。
+     */
+    private val _fileDone = MutableStateFlow<Triple<String, String, File>?>(null)
+    val fileDone: StateFlow<Triple<String, String, File>?> = _fileDone.asStateFlow()
 
     /** 文件任务失败原因 */
     private val _fileError = MutableStateFlow<String?>(null)
@@ -1663,11 +1787,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 runCatching { withContext(Dispatchers.IO) { block() } }
-                    .onSuccess { _fileDone.value = title to it.absolutePath }
+                    .onSuccess { _fileDone.value = Triple(title, it.absolutePath, it) }
                     .onFailure { _fileError.value = fileErrorMessage("没能完成这次文件操作", it) }
             } finally {
                 _fileBusy.value = false
             }
+        }
+    }
+
+    /**
+     * 把刚导出的文件交给系统分享面板。
+     *
+     * 这是导出功能的「最后一公里」：文件落在 Android/data，而 Android 11+ 上
+     * 系统「文件」App 与 USB MTP 都看不到它，第三方文件管理器也被 Scoped Storage
+     * 挡住 —— 没有这一步，用户拿到一串路径却无法把 CSV 取出手机。
+     * 走 FileProvider 给出 content:// URI，即可发送到电脑、网盘或聊天工具。
+     *
+     * 失败（没有可接收的应用、URI 授权被拒）时用一句人话说明，不静默。
+     */
+    fun shareFile(file: File, title: String) {
+        val ctx = getApplication<Application>()
+        runCatching {
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+            val mime = when (file.extension.lowercase()) {
+                "csv" -> "text/csv"
+                "json" -> "application/json"
+                else -> "*/*"
+            }
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            ctx.startActivity(
+                Intent.createChooser(send, title).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure {
+            notify("没有找到可以接收这个文件的应用，可以改用「复制路径」")
         }
     }
 
@@ -1731,7 +1888,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         if (it is BackupManager.WordbookMismatchException) {
                             _wordbookMismatch.value = MismatchPrompt(file, it.message ?: "")
                         } else {
-                            _fileError.value = fileErrorMessage("没能恢复数据", it)
+                            /*
+                             * 恢复失败必须走全局提示，不能只写 [_fileError]。
+                             *
+                             * [_fileError] 只有设置页会渲染（全工程仅 SettingsScreen 读它），
+                             * 而恢复要跑几秒，用户点完「确认恢复」很可能已经返回上一页 ——
+                             * 此时校验失败（例如「不是过四斩六的备份文件」）一句话都不会出现，
+                             * 用户以为恢复成功；下次进设置页时这条错误还会被
+                             * `remember { vm.consumeFileError() }` 主动丢掉，永远看不到。
+                             * 成功路径本来就走 notify，失败与成功必须同一个通道。
+                             */
+                            notify(fileErrorMessage("没能恢复数据", it))
                         }
                     }
             } finally {
@@ -1774,6 +1941,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     stage = repo.stage,
                     iconStyle = repo.iconStyle,
                     desktopIconStyle = LauncherIcons.appliedStyle(getApplication()),
+                    // 实际生效的 alias 推导出的级别，供设置页那句「简洁图标「四/六」」使用
+                    desktopIconStage = when (LauncherIcons.appliedAlias(getApplication())) {
+                        LauncherIcons.ALIAS_SI -> WordDb.STAGE_CET4
+                        LauncherIcons.ALIAS_LIU -> WordDb.STAGE_CET6
+                        else -> null
+                    },
                     themeMode = repo.themeMode,
                     animationsEnabled = repo.animationsEnabled,
                     soundEnabled = repo.soundEnabled,
