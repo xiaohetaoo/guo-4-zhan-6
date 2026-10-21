@@ -71,6 +71,7 @@ import com.hdu.cetvocab.ui.components.AppCard
 import com.hdu.cetvocab.ui.components.AppTopBar
 import com.hdu.cetvocab.ui.components.BulletRow
 import com.hdu.cetvocab.ui.components.IconChevronRight
+import com.hdu.cetvocab.ui.components.MenuRow
 import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.util.LauncherIcons
 import java.io.File
@@ -79,7 +80,7 @@ import com.hdu.cetvocab.ui.theme.LocalAppColors
 import kotlin.math.roundToInt
 
 @Composable
-fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
+fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onReplayTutorial: () -> Unit) {
     val state by vm.profile.collectAsState()
     var showReset by remember { mutableStateOf(false) }
 
@@ -223,6 +224,27 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+            }
+
+            // ---------- 新手教程 ----------
+            item {
+                AppCard {
+                    SectionTitle(text = "新手教程")
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = "第一次点「开始今日学习」时会自动展示一次，告诉你这一屏每个地方是做什么用的。" +
+                            "已经看过的话，可以在这里重新走一遍。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    MenuRow(
+                        title = "重新查看新手教程",
+                        subtitle = "装一局今日学习，把五个步骤再讲一遍",
+                        accent = MaterialTheme.colorScheme.primary,
+                        onClick = { onReplayTutorial() }
+                    )
                 }
             }
 

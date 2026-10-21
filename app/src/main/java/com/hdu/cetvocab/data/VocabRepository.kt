@@ -169,6 +169,21 @@ class VocabRepository(context: Context) {
         get() = prefs.getBoolean(KEY_ANIM, true)
         set(value) = prefs.edit().putBoolean(KEY_ANIM, value).apply()
 
+    /**
+     * 新手教程是否已经看过（第一次点「开始今日学习」时在学**习页**上分步高亮讲一遍）。
+     *
+     * 只在**结束教程时**才写 true —— 中途杀进程、退出应用都不算看过，
+     * 下次进来会重新从头讲。教程是给第一次用的人看的，看了一半等于没看，
+     * 而「跳过」按钮走的是同一条结束路径（用户明确表态了不想看），所以跳过也算已看。
+     *
+     * 不写进备份 JSON 的 prefs 段：恢复前一份备份的语义是「把这台机器的记录换成那份」，
+     * 而不是「假装已经学会这个应用了」。换机恢复后重看一遍教程是合理的。
+     * [resetAll] 会 prefs.clear()，教程标记一并清掉 —— 清空数据等于从头开始，与之一致。
+     */
+    var tutorialSeen: Boolean
+        get() = prefs.getBoolean(KEY_TUTORIAL_SEEN, false)
+        set(value) = prefs.edit().putBoolean(KEY_TUTORIAL_SEEN, value).apply()
+
     // ---------------- 熟练度等级 ----------------
 
     /** 等级含义：0 未学 1 初识 2 认识 3 熟悉 4 掌握 5 精通 */
@@ -948,6 +963,9 @@ class VocabRepository(context: Context) {
         private const val KEY_ICON_STYLE = "icon_style"
         private const val KEY_THEME = "theme_mode"
         private const val KEY_ANIM = "animations_enabled"
+
+        /** 新手教程已看过，见 [tutorialSeen] */
+        private const val KEY_TUTORIAL_SEEN = "tutorial_seen"
 
         /**
          * 单次传入 [WordDb.wordsByIds] 的 id 上限。

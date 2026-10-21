@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -69,6 +70,10 @@ import com.hdu.cetvocab.ui.components.SectionTitle
 import com.hdu.cetvocab.ui.components.SimilarBlock
 import com.hdu.cetvocab.ui.components.SpeakButton
 import com.hdu.cetvocab.ui.components.Tag
+import com.hdu.cetvocab.ui.components.TutorialAnchor
+import com.hdu.cetvocab.ui.components.TutorialOverlay
+import com.hdu.cetvocab.ui.components.TutorialStep
+import com.hdu.cetvocab.ui.components.tutorialAnchor
 import com.hdu.cetvocab.ui.components.WordHeadline
 import com.hdu.cetvocab.ui.theme.LocalAppColors
 import com.hdu.cetvocab.ui.theme.Motion
@@ -86,6 +91,21 @@ fun StudyScreen(
     val state by vm.study.collectAsState()
     val closeLabel = stringResource(R.string.action_close)
     val closeInteraction = remember { MutableInteractionSource() }
+
+    /*
+     * 新手教程的五个定位锚点。
+     *
+     * 顺序与 AppViewModel.TUTORIAL_STEP_COUNT 的注释一一对应：
+     * 0 顶部进度 → 1 单词主卡 → 2 发音键 → 3 收藏键 → 4 底部按钮组。
+     *
+     * 这里把锚点建成一个列表而不是五个具名变量：
+     * 教程层按 tutorialStep 下标取，新增一步时只改这一处与那份步骤文案，
+     * 不会出现「加了步骤但忘了少写一个锚点」这类错位。
+     */
+    val anchors = remember {
+        List(vm.tutorialStepCount) { TutorialAnchor() }
+    }
+    val tutorialSteps = remember(anchors) { buildTutorialSteps(anchors) }
 
     // 学习时长只累计「本页在前台」的时间，具体计时由 ViewModel 维护：
     // 它同时知道应用是否退到了后台，能把切出去的那段时间排除掉。
@@ -129,11 +149,27 @@ fun StudyScreen(
         return
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    /*
+     * 整页装在一个 Box 里：学习内容在底层，新手教程的遮罩叠在顶层。
+     *
+     * 教程必须盖住顶栏、卡片与底栏三者，而它们是 Column 的兄弟节点 ——
+     * 只有把教程层摆在与 Column 同级的后一个位置，才能真的盖住它们。
+     * 反过来若把 TutorialOverlay 塞进 Column 内部，它只会占据剩余空间，
+     * 顶栏与底栏会露在遮罩外面，高亮圈的坐标也会跟着错位。
+     */
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
         // ---------- 顶部进度 ----------
         // 关闭键热区从 34 撑到 44（K13），上下内边距从 12 收到 7 等量吸收，
         // 这一栏仍是 58dp；芯片贴行首（CenterStart）+ 间距 12→2，标题位置不变。
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 7.dp)
+                // 教程第 0 步讲「这是第几个词、哪个级别」，框住整条进度栏
+                .then(
+                    if (state.tutorialActive) Modifier.tutorialAnchor(anchors[0]) else Modifier
+                )
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 HitArea(
                     onClick = onFinish,
@@ -204,6 +240,10 @@ fun StudyScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
+                // 教程第 1 步讲「这一张卡正反面各有什么」，框住整张卡
+                .then(
+                    if (state.tutorialActive) Modifier.tutorialAnchor(anchors[1]) else Modifier
+                )
         ) {
             /*
              * 翻卡用「绕 Y 轴真翻转」，不用 Crossfade。
@@ -251,7 +291,11 @@ fun StudyScreen(
                         speak = speak,
                         vm = vm,
                         fav = state.favIds.contains(word.id),
-                        level = state.currentLevel
+                        level = state.currentLevel,
+                        // 教程第 2 步框发音键、第 3 步框收藏键；
+                        // 传 null 时这两个控件不挂定位修饰符，正常使用时零开销。
+                        speakAnchor = if (state.tutorialActive) anchors[2] else null,
+                        favAnchor = if (state.tutorialActive) anchors[3] else null
                     )
                 } else {
                     CardBack(word, speak)
@@ -260,7 +304,16 @@ fun StudyScreen(
         }
 
         // ---------- 底部操作 ----------
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+                // 教程最后一步讲「点这里查看释义，再选认识或待加强」，框住整组按钮
+                .then(
+                    if (state.tutorialActive) {
+                        Modifier.tutorialAnchor(anchors[vm.tutorialStepCount - 1])
+                    } else Modifier
+                )
+        ) {
             // 「查看释义」与「认识 / 待加强」两组按钮的切换也走弹簧：
             // 原先是一帧之内直接换掉，跟上面翻卡的动画节奏完全脱节。
             AnimatedContent(
@@ -319,8 +372,72 @@ fun StudyScreen(
                 )
             }
         }
+        }
+
+        /*
+         * 新手教程遮罩。放在 Column 之后（同一个 Box 的第二个子节点），
+         * 才能盖住顶栏、卡片与底栏三者，高亮洞按锚点上报的坐标挖出来。
+         *
+         * 只在 tutorialStep 非 null 时渲染；跳过后整个 Composable 直接返回，
+         * 不留下空转的 Canvas 或额外的手势拦截层。
+         */
+        val tutorialStep = state.tutorialStep
+        TutorialOverlay(
+            step = tutorialStep?.let { tutorialSteps.getOrNull(it) },
+            stepIndex = tutorialStep ?: 0,
+            stepCount = vm.tutorialStepCount,
+            onNext = { vm.tutorialNext() },
+            onSkip = { vm.tutorialSkip() }
+        )
     }
 }
+
+/**
+ * 新手教程的五步文案 + 各自要框住的锚点。
+ *
+ * 写作口径（与全站一致，改文案时照这个来）：
+ * - 说「你会看到什么、点一下会发生什么」，不解释实现（不出现「队列」「SM-2」）；
+ * - 每步只讲一件事，句子控制在两行内 —— 气泡是盖在卡片上的，太长会挡住被讲解的控件；
+ * - 不复述界面上的字（「这里有一个叫『查看释义』的按钮」是废话），而是讲**为什么**；
+ * - 五步走完用户就该知道：这里是第几个词、这张卡能干什么、点哪里开始背。
+ *
+ * [anchors] 的下标必须与 [com.hdu.cetvocab.ui.AppViewModel] 的 TUTORIAL_STEP_COUNT
+ * 注释里的顺序一致：0 顶部进度 / 1 单词卡 / 2 发音键 / 3 收藏键 / 4 底部按钮组。
+ */
+private fun buildTutorialSteps(
+    anchors: List<TutorialAnchor>
+): List<TutorialStep> = listOf(
+    TutorialStep(
+        title = "这是今天的第几个词",
+        body = "顶部写着本组进度：一共几个词、已经过掉几个。" +
+            "左边那个叉随时可以退出，进度会自动保存。",
+        target = anchors.getOrNull(0)
+    ),
+    TutorialStep(
+        title = "先自己想，再翻面",
+        body = "正面只有单词和音标，先在心里回忆词义；" +
+            "背面是释义、例句、词根词缀和联想记忆，帮你记牢它。",
+        target = anchors.getOrNull(1)
+    ),
+    TutorialStep(
+        title = "不确定怎么读就点它",
+        body = "喇叭使用系统自带的离线语音，不联网也能读。" +
+            "想让它读慢一点，可以到设置里调语速。",
+        target = anchors.getOrNull(2)
+    ),
+    TutorialStep(
+        title = "重要的词收藏起来",
+        body = "点这颗心把词加进生词本，之后在词库页可以只复习生词。" +
+            "卡片底部那排小圆点是这个词的熟练度。",
+        target = anchors.getOrNull(3)
+    ),
+    TutorialStep(
+        title = "回忆完就翻卡自评",
+        body = "点「查看释义」翻到背面，然后如实选择「认识」或「待加强」。" +
+            "选「待加强」的词会排得更早再出现一次。",
+        target = anchors.getOrNull(4)
+    )
+)
 
 @Composable
 private fun CardFront(
@@ -328,7 +445,11 @@ private fun CardFront(
     speak: (String) -> Unit,
     vm: AppViewModel,
     fav: Boolean,
-    level: Int
+    level: Int,
+    /** 教程第 2 步要框的发音键；null 表示不在教程里 */
+    speakAnchor: TutorialAnchor? = null,
+    /** 教程第 3 步要框的收藏键；null 表示不在教程里 */
+    favAnchor: TutorialAnchor? = null
 ) {
     val favLabel = stringResource(
         if (fav) R.string.cd_fav_remove else R.string.cd_fav_add
@@ -345,30 +466,40 @@ private fun CardFront(
             // 收藏芯片 38dp 太小（K13）。热区补到 44dp、贴右对齐，
             // 芯片仍停在卡片右缘；这一行上面有 weight(1f) 的弹性空隙，
             // 多出的 6dp 由它吸收，卡片里其它内容不动。
-            HitArea(
-                onClick = { vm.toggleFavCurrent() },
-                interaction = favInteraction,
-                min = 44.dp,
-                align = Alignment.CenterEnd,
-                contentDescription = favLabel
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .springPress(favInteraction, pressedScale = 0.86f)
-                        .clip(RoundedCornerShape(13.dp))
-                        .background(
-                            if (fav) LocalAppColors.current.cardAmber
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        ),
-                    contentAlignment = Alignment.Center
+            //
+            // 教程锚点挂在外层 wrapContentSize 的 Box 上，理由同下面那颗喇叭：
+            // HitArea 内部的 Box 套了 sizeIn(minWidth/minHeight)，在 Row 里会被
+            // 量成整行剩余宽度，直接把锚点传进去会得到一条竖长的空框。
+            Box(Modifier.wrapContentSize()) {
+                HitArea(
+                    onClick = { vm.toggleFavCurrent() },
+                    interaction = favInteraction,
+                    min = 44.dp,
+                    align = Alignment.CenterEnd,
+                    contentDescription = favLabel,
+                    // 教程第 3 步框这颗心形
+                    modifier = if (favAnchor != null) {
+                        Modifier.tutorialAnchor(favAnchor)
+                    } else Modifier
                 ) {
-                    IconHeart(
-                        modifier = Modifier.size(19.dp),
-                        filled = fav,
-                        color = if (fav) LocalAppColors.current.warning
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .springPress(favInteraction, pressedScale = 0.86f)
+                            .clip(RoundedCornerShape(13.dp))
+                            .background(
+                                if (fav) LocalAppColors.current.cardAmber
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconHeart(
+                            modifier = Modifier.size(19.dp),
+                            filled = fav,
+                            color = if (fav) LocalAppColors.current.warning
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -394,7 +525,25 @@ private fun CardFront(
                 )
             }
             Spacer(Modifier.height(20.dp))
-            SpeakButton(text = word.word, onSpeak = speak, size = 56.dp)
+            /*
+             * 锚点必须挂在**外层** Box 上，不能直接传给 SpeakButton。
+             *
+             * SpeakButton 内部是 `modifier.size(min)` 再套一层 size(size) 的圆，
+             * 它把这个 modifier 应用在自己最外层的 Box 上 —— 而那个 Box 在
+             * Column(CenterHorizontally) 里会被量成 fillMaxWidth 的槽位，
+             * 上报出来的矩形实测是 145×300dp 的竖长条，高亮圈会框住一大片空白。
+             * 外面包一层 wrapContentSize 的 Box，尺寸就正好是那颗 56dp 的圆。
+             */
+            Box(Modifier.wrapContentSize()) {
+                SpeakButton(
+                    text = word.word,
+                    onSpeak = speak,
+                    size = 56.dp,
+                    modifier = if (speakAnchor != null) {
+                        Modifier.tutorialAnchor(speakAnchor)
+                    } else Modifier
+                )
+            }
         }
         Spacer(Modifier.weight(1f))
         Row(

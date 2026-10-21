@@ -49,8 +49,15 @@ android {
         //   孤儿错题不再占用重做名额、浅色主题金属色与熟练度圆点对比度、
         //   K13 遗漏的 4 处触摸目标、导出可分享（FileProvider）、
         //   CSV 加 UTF-8 BOM、默认图标补 monochrome、dataExtractionRules 等。
-        versionCode = 47
-        versionName = "1.4.6"
+        // v1.4.7 = 两处体验补齐：
+        //   ① 四六级切换做出「切换感」—— 指示器改为可过冲的弹簧（spatialPop，
+        //      阻尼比 0.62）+ 途中横向拉伸、两级文字反向缩放，
+        //      首页整页从「竖向上滑 28dp」改为按切换方向横向推移 24% 屏宽；
+        //   ② 新增新手教程 —— 第一次点「开始今日学习」时在学习页上
+        //      聚光灯分步高亮五步（进度、卡片、发音、收藏、底部按钮组），
+        //      可跳过（跳过也算已看），设置页新增「重新查看新手教程」。
+        versionCode = 48
+        versionName = "1.4.7"
         vectorDrawables { useSupportLibrary = true }
     }
 

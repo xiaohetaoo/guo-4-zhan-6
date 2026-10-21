@@ -121,10 +121,23 @@ data class StudyUiState(
     val favIds: Set<Int> = emptySet(),
     val currentLevel: Int = 0,
     val finished: Boolean = false,
-    val newAchievements: List<AchievementDef> = emptyList()
+    val newAchievements: List<AchievementDef> = emptyList(),
+    /**
+     * 新手教程的当前步骤下标，null 表示教程已关闭。
+     *
+     * 放在 StudyUiState 而不是页面本地状态：教程要点名的控件分散在
+     * 顶栏（进度）、卡片（发音、收藏、熟练度圆点）与底栏（查看释义）三处，
+     * 页面里有十来个 Composable，各自 remember 一份会产生十几个副本。
+     * 状态归 ViewModel 之后，翻卡、答题这些动作也能顺手把教程推进或关掉
+     * （见 [AppViewModel.flipCard] 与 [AppViewModel.answerCurrent]）。
+     */
+    val tutorialStep: Int? = null
 ) {
     val current: Word? get() = queue.getOrNull(index)
     val total: Int get() = queue.size
+
+    /** 教程是否正在展示 */
+    val tutorialActive: Boolean get() = tutorialStep != null
 }
 
 /** 选关页用来挂「继续上一局」提示条的信息 */
@@ -751,8 +764,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun startTodayStudy(onReady: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            val queue = withContext(Dispatchers.IO) { repo.todayQueue() }
-            startQueue("今日学习", queue, onReady)
+            // 教程是否展示要在 IO 之外先取定：todayQueue 跑在 IO 线程，
+            // 而 tutorialSeen 读的是 prefs（内部有锁，但从 IO 线程读更稳妥）。
+            val (queue, seen) = withContext(Dispatchers.IO) {
+                repo.todayQueue() to repo.tutorialSeen
+            }
+            startQueue("今日学习", queue, onReady, showTutorial = !seen)
         }
     }
 
@@ -798,7 +815,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun startQueue(title: String, queue: List<Word>, onReady: (Boolean) -> Unit) {
+    private suspend fun startQueue(
+        title: String,
+        queue: List<Word>,
+        onReady: (Boolean) -> Unit,
+        showTutorial: Boolean = false
+    ) {
         if (queue.isEmpty()) {
             notify("这里暂时没有需要学习的单词")
             onReady(false)
@@ -817,13 +839,97 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             queue = queue,
             index = 0,
             favIds = favIds,
-            currentLevel = startLevel
+            currentLevel = startLevel,
+            // 第一次点「开始今日学习」时把教程摆出来。
+            // 只挂在**今日学习**这一个入口：它是首页那张卡的主按钮，
+            // 也是新手唯一会主动点的那个（「继续学习」「单元学习」「生词本复习」
+            // 都是用过一阵子才会去找的入口，那时候弹教程只会碍事）。
+            tutorialStep = if (showTutorial) 0 else null
         )
         onReady(true)
     }
 
+    /**
+     * 新手教程的步骤数（学习页聚光灯分步高亮）。
+     *
+     * 顺序按「用户真正会走的那条路」排：先认识这一屏是什么（进度与级别），
+     * 再看这一张卡上能干什么（发音、收藏、熟练度），最后才是唯一该点的那个按钮。
+     * 与 [TutorialStep] 的枚举顺序必须一致，改一处要连另一处一起改。
+     */
+    val tutorialStepCount: Int get() = TUTORIAL_STEP_COUNT
+
+    /** 教程「下一步」。已到最后一步时结束教程。 */
+    fun tutorialNext() {
+        _study.update { s ->
+            val step = s.tutorialStep ?: return@update s
+            if (step + 1 >= TUTORIAL_STEP_COUNT) {
+                // 走完了也算看过，写盘在主线程之外做（prefs 写入本身很快，
+                // 但仍不该占着状态更新的这一帧）
+                viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = true }
+                s.copy(tutorialStep = null)
+            } else {
+                s.copy(tutorialStep = step + 1)
+            }
+        }
+    }
+
+    /**
+     * 教程「跳过」。
+     *
+     * 与走完同一条结束路径 —— **跳过也算已看**，不再自动弹。
+     * 用户明确表态不想看，下次再弹就是把「跳过」当成没点过，
+     * 那按钮就成了摆设。想再看有设置页的「重新查看新手教程」。
+     */
+    fun tutorialSkip() {
+        _study.update { s ->
+            if (s.tutorialStep == null) return@update s
+            viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = true }
+            s.copy(tutorialStep = null)
+        }
+    }
+
+    /**
+     * 从设置页主动重看教程。
+     *
+     * 调用方负责导航：教程画在学习页上，所以必须先把一局学习装好再跳过去。
+     * 这里只负责把「已看过」这个标记复位，让下一次 [startTodayStudy]
+     * 或 [startTutorialReplay] 重新摆出教程。
+     */
+    fun prepareTutorialReplay() {
+        viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = false }
+    }
+
+    /**
+     * 设置页「重新查看新手教程」的落地动作：装一局今日学习并**强制**带教程。
+     *
+     * 不复用 [startTodayStudy] 的原因：那条路按 `tutorialSeen` 判断，
+     * 而这里刚把标记复位、写入是异步的，读到的可能还是旧值。
+     * 队列为空时（今日目标已达成 / 本级学完）退回继续学习队列，
+     * 保证「重看教程」在任何状态下都能真的看到东西 —— 否则用户点了没反应。
+     */
+    fun startTutorialReplay(onReady: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val queue = withContext(Dispatchers.IO) {
+                repo.todayQueue().ifEmpty { repo.extraQueue() }
+            }
+            startQueue("新手教程", queue, onReady, showTutorial = true)
+        }
+    }
+
+    /**
+     * 翻卡。
+     *
+     * 教程走到第 4 步（底部的「查看释义」）时，用户点这个按钮就等于照着教程做了 ——
+     * 顺带把教程关掉。否则教程的高亮圈还压在「认识 / 待加强」上，
+     * 而他已经翻到背面、该看的按钮全被遮罩挡着，只能自己找跳过。
+     * 只在这一步收掉：前几步翻卡没有这个含义（用户可能只是想看看背面长什么样）。
+     */
     fun flipCard() {
-        _study.update { it.copy(flipped = !it.flipped) }
+        _study.update { s ->
+            val endTutorial = s.tutorialStep == TUTORIAL_STEP_LAST
+            if (endTutorial) viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = true }
+            s.copy(flipped = !s.flipped, tutorialStep = if (endTutorial) null else s.tutorialStep)
+        }
     }
 
     /**
@@ -2014,5 +2120,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 闯关快照的有效期：超过就当作「用户已经不记得这一局了」 */
         private const val RESTORE_WINDOW_MS = 30 * 60 * 1000L
+
+        /**
+         * 新手教程的步骤数。
+         *
+         * 五步只讲学习卡这一屏，顺序就是用户真正会走的那条路：
+         * 0 顶部进度与级别 → 1 单词主卡 → 2 发音键 → 3 收藏键（含熟练度圆点）
+         * → 4 底部的「查看释义 / 认识 / 待加强」。
+         *
+         * 不往闯关、错题本、备份那些地方延伸：第一次进来的人还没见过那些页面，
+         * 讲了也记不住，还会把「点一下就能开始背」这件事拖长到一分钟以上。
+         * 那些功能的引导放在它们各自的空态文案里更合适。
+         */
+        private const val TUTORIAL_STEP_COUNT = 5
+
+        /** 教程最后一步（底部按钮组）的下标，见 [TUTORIAL_STEP_COUNT] */
+        private const val TUTORIAL_STEP_LAST = TUTORIAL_STEP_COUNT - 1
     }
 }

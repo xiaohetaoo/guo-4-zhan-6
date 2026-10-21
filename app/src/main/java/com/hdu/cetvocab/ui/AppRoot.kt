@@ -525,7 +525,27 @@ private fun AppNavHost(
         }
 
         composable(Routes.SETTINGS) {
-            SettingsScreen(vm = vm, onBack = { nav.popBackStack() })
+            SettingsScreen(
+                vm = vm,
+                onBack = { nav.popBackStack() },
+                /*
+                 * 重看新手教程：先装好一局学习再跳过去。
+                 *
+                 * 教程画在学习页上，所以必须真的进学习页 —— 不能像普通页面那样
+                 * 直接 navigate。装不到词（今日目标已达成且本级学完）时
+                 * startTutorialReplay 内部会退回继续学习队列，仍然空才回调 false，
+                 * 那时给一句提示，而不是把用户带进一张空卡片。
+                 *
+                 * 这里用 popUpTo(SETTINGS) 把设置页留在栈里：用户看完教程点关闭，
+                 * 会回到设置页继续调别的，符合「从设置里点进来的」这条心智。
+                 */
+                onReplayTutorial = {
+                    vm.startTutorialReplay { ok ->
+                        if (ok) nav.navigate(Routes.STUDY) { launchSingleTop = true }
+                        else vm.toast("现在没有可以学习的单词，明天再来试试")
+                    }
+                }
+            )
         }
 
         composable("${Routes.WORD}/{id}") { entry ->

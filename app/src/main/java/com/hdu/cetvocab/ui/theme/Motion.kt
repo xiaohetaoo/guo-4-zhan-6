@@ -85,6 +85,21 @@ object Motion {
         else spring(dampingRatio = 0.90f, stiffness = Spring.StiffnessMedium)
 
     /**
+     * 分段控件指示器：**允许明显过冲**（阻尼比 0.62）。
+     *
+     * [spatialSnappy] 的阻尼比 0.90 几乎不过冲，滑动过程是「匀速到位」，
+     * 在四六级那种两格之间的小控件上，看上去更像一次数值变化而不是一次「切换」。
+     * 这里把阻尼压到 0.62、刚度提到 700：色块会略微冲过目标格再弹回，
+     * 用户在拇指底下能直接看到「它刚从那头滑过来」。
+     *
+     * 仍然走 [animationsEnabled] 的开关：关掉动效时退化为 [snap]，
+     * 与其他弹簧保持一致，不给「关了动效这个还在动」留例外。
+     */
+    fun <T> spatialPop(): FiniteAnimationSpec<T> =
+        if (!animationsEnabled) snap()
+        else spring(dampingRatio = 0.62f, stiffness = 700f)
+
+    /**
      * 透明度 / 颜色：不回弹。
      * 过冲会让淡入淡出出现「闪一下」，必须用临界阻尼。
      */

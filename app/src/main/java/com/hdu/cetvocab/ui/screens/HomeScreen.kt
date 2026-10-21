@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,6 +41,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,21 +80,43 @@ fun HomeScreen(
     val stageProgressPct = if (state.totalWords <= 0) 0
     else (state.stageLearned * 100.0 / state.totalWords).roundToInt()
 
-    // 四六级切换时整页重放一次「淡入 + 轻微上滑」。
-    // 只认「级别真的变了」才播：首次进入首页、从别的 tab 切回来都不重放，避免无谓的闪动。
-    // 这里用弹簧而不是固定时长缓动：切换级别是个可以被打断的操作
-    // （用户可能在动画没走完时又点回四级），弹簧能自然接管而不是重新起播。
+    /*
+     * 四六级切换：整页按**切换方向**横向推移一格。
+     *
+     * 此前是「透明度 0→1 + 上滑 28dp」，方向是竖的，而级别切换是横向的
+     * （控件里四级在左格、六级在右格），两套方向互相打架；
+     * 而且切级别时首页内容其实是整个换掉（进度环、队列、统计全变），
+     * 却没有「旧内容被推走、新内容推上来」的表达，看上去像数字刷新。
+     *
+     * 现在换成一条滑轨：切到六级（向右一格）时旧内容往左推出、新内容从右侧推入，
+     * 切回四级时方向相反。判据是**级别序号增大还是减小**，
+     * 与 StageSwitch 里指示器的位移方向同源，拇指底下的控件和整页内容朝同一边走。
+     *
+     * 三个实现细节：
+     * 1. 位移幅度取 24% 屏宽而不是整屏：整页飞出去会盖过底部标签栏的转场语义
+     *    （那是「换了一页」，而这里只是「换了一本书」），小幅推移已经足够读出来。
+     * 2. 透明度只压到 0.35 而不是 0：切级别时右侧内容本来就完全不同，
+     *    压到全透明等于一次淡入淡出，位移就白做了。
+     * 3. 用**同一个** Animatable 驱动进出两段（0→1 全程），
+     *    而不是让 EnterTransition/ExitTransition 各跑各的 —— 后者在快速连点
+     *    两级时会出现「两段动画同时在中途」的重影，而单条滑轨天然可被打断。
+     */
     val stageAnim = remember { Animatable(1f) }
     // 初值刻意用 -1 而不是 state.stage：冷启动第一帧读到的往往是快照默认级别，
     // 真正的级别要等 refreshHome 回来。若把首帧的值当作「已见过」，
-    // 六级用户每次冷启动都会多播一次整页淡入，与「首次进入不重放」的意图相反。
+    // 六级用户每次冷启动都会多播一次整页横移，与「首次进入不重放」的意图相反。
     val seenStage = remember { mutableIntStateOf(-1) }
+    // 本次横移的方向：+1 表示「向右一格」（四级→六级），-1 表示往回。
+    // 必须记在状态里而不是每次读 state.stage 现算：动画跑到一半时 state.stage
+    // 已经是新值了，现算会把方向算反。
+    var slideDir by remember { mutableIntStateOf(1) }
     LaunchedEffect(state.stage) {
         if (seenStage.intValue < 0) {
             seenStage.intValue = state.stage
             return@LaunchedEffect
         }
         if (state.stage != seenStage.intValue) {
+            slideDir = if (state.stage > seenStage.intValue) 1 else -1
             seenStage.intValue = state.stage
             stageAnim.snapTo(0f)
             // 透明度不能回弹（会闪），所以整段用临界阻尼弹簧，只求收束干脆。
@@ -103,8 +128,11 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                alpha = stageAnim.value
-                translationY = (1f - stageAnim.value) * 28.dp.toPx()
+                // 前 40% 的进度走完位移，后 60% 只收透明度：
+                // 两者同时线性收束会让内容「一边飘一边淡」，读起来是糊的。
+                val travel = (stageAnim.value / 0.4f).coerceIn(0f, 1f)
+                alpha = 0.35f + 0.65f * travel
+                translationX = slideDir * (1f - travel) * size.width * 0.24f
             },
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp
@@ -390,13 +418,25 @@ private fun Modifier.stageSwipe(stage: Int, onSelect: (Int) -> Unit): Modifier =
  * 四六级分段控件。
  *
  * 原实现是「选中项瞬间换底色」——手指抬起的同一帧颜色就跳过去了，
- * 没有任何过渡，这是最典型的「生硬」。改成一条**弹簧滑动的指示器**：
- * 底色块在两级之间滑过去，文字颜色同步做颜色过渡。
+ * 没有任何过渡，这是最典型的「生硬」。现在这一格控件里叠了三层动效，
+ * 三层都朝**同一个方向**走，用户才能读成「切换」而不是「变了个数字」：
+ *
+ * 1. **指示器回弹滑行**：底色块用 `Motion.spatialPop()`（阻尼比 0.62）滑过去，
+ *    会略微冲过目标格再弹回。这是「切换感」的主要来源 ——
+ *    阻尼比 0.90 的那种匀速到位，在小控件上根本看不出「它刚从那头过来」。
+ * 2. **指示器横向拉伸**：滑行途中色块变宽最多 12%，落位时收回。
+ *    类比手指把一块湿墨推过去，尾巴被拉长。
+ * 3. **文字反向缩放**：离开的那一格缩到 0.88 并淡出，进入的那一格从 0.88 弹到 1。
+ *    文字若原地变色，就只剩色块在动，读起来仍像刷新。
  *
  * 注意两个子项用**固定宽度**而不是 `weight(1f)`：Row 在未限定宽度时，
  * 带权重的子项会吃掉父级给的全部可用宽度，整个控件会被拉成满屏宽，
  * 把同一行左侧的问候语挤成 0 宽（实测过，问候语直接消失）。
  * 这里两级标签都是两字，固定 52dp 一格，跟随字号放大也放得下。
+ *
+ * 拉伸只在**格内**画，不能撑破控件：外层 Box 已有 clip，
+ * 色块用 `graphicsLayer` 缩放而不是改 `width` —— 后者会真的改变布局，
+ * 滑行途中把相邻那格的文字挤歪。
  */
 @Composable
 private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
@@ -404,9 +444,12 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
     val selectedIndex = items.indexOfFirst { it.first == stage }.coerceAtLeast(0)
     val position by animateFloatAsState(
         targetValue = selectedIndex.toFloat(),
-        animationSpec = Motion.spatialSnappy(),
+        animationSpec = Motion.spatialPop(),
         label = "stagePill"
     )
+    // 拉伸量由「离目标格还有多远」推出：刚起跳时 0、中途最大、落位时归零。
+    // 直接拿 position 的小数部分算，切换途中两端对称，来回点也不会有一头特别宽。
+    val stretch = 1f + 0.12f * (1f - kotlin.math.abs(position - position.roundToInt()))
     // 两个子项共用同一个交互源：只为了把水波纹关掉（滑动的色块本身就是反馈，
     // 再叠一层波纹会显脏），不参与按压缩放。
     val interaction = remember { MutableInteractionSource() }
@@ -429,6 +472,11 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
                     .offset(x = itemWidth * position)
                     .width(itemWidth)
                     .fillMaxHeight()
+                    .graphicsLayer {
+                        // 以自身中心为锚点横向拉伸，否则会朝右格那一侧长出去
+                        scaleX = stretch
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
+                    }
                     .clip(RoundedCornerShape(13.dp))
                     .background(MaterialTheme.colorScheme.primary)
             )
@@ -442,17 +490,25 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
             transitionSpec = {
                 val forward = targetState > initialState
                 if (forward) {
-                    (slideInHorizontally(Motion.spatial()) { it / 2 } + fadeIn(Motion.effects()))
-                        .togetherWith(
-                            slideOutHorizontally(Motion.spatial()) { -it / 2 } +
-                                fadeOut(Motion.effects())
-                        )
+                    (
+                        slideInHorizontally(Motion.spatial()) { it / 2 } +
+                            fadeIn(Motion.effects()) +
+                            scaleIn(Motion.spatialPop(), initialScale = 0.88f)
+                        ).togetherWith(
+                        slideOutHorizontally(Motion.spatial()) { -it / 2 } +
+                            fadeOut(Motion.effects()) +
+                            scaleOut(Motion.spatialPop(), targetScale = 0.88f)
+                    )
                 } else {
-                    (slideInHorizontally(Motion.spatial()) { -it / 2 } + fadeIn(Motion.effects()))
-                        .togetherWith(
-                            slideOutHorizontally(Motion.spatial()) { it / 2 } +
-                                fadeOut(Motion.effects())
-                        )
+                    (
+                        slideInHorizontally(Motion.spatial()) { -it / 2 } +
+                            fadeIn(Motion.effects()) +
+                            scaleIn(Motion.spatialPop(), initialScale = 0.88f)
+                        ).togetherWith(
+                        slideOutHorizontally(Motion.spatial()) { it / 2 } +
+                            fadeOut(Motion.effects()) +
+                            scaleOut(Motion.spatialPop(), targetScale = 0.88f)
+                    )
                 }
             },
             contentAlignment = Alignment.CenterStart,
