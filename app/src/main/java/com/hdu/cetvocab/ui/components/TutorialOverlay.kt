@@ -3,9 +3,9 @@ package com.hdu.cetvocab.ui.components
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -188,16 +189,24 @@ fun TutorialOverlay(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenHeightPx = with(density) { maxHeight.toPx() }
 
-        // ---------- 遮罩 + 高亮边框（同一块 Canvas 画，保证两者像素对齐） ----------
+        // ---------- 遮罩（纯绘制，不接手势） ----------
+        /*
+         * 这一层只负责画，**不挂任何 pointerInput**。
+         *
+         * 原因：Compose 的手势分派无法「只在洞内放行」。最上层的 pointerInput 节点
+         * 会接管命中测试，即使它在 Main 阶段不消费事件，底下的真实按钮也收不到
+         * 一次完整的按下—抬起序列（实测：第 5 步照文案去点被高亮的「查看释义与例句」，
+         * 翻卡不触发）。所以遮罩本身必须彻底不碰输入。
+         *
+         * 拦截改由下面那四块「洞外挡板」负责 —— 洞区里干脆没有任何覆盖层，
+         * 事件自然落到真实控件上。这也正是聚光灯引导该有的行为：
+         * 高亮圈里那颗按钮是真的能点的。
+         */
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 // 记下自己在 root 坐标系里的原点，用于把锚点坐标换算进来
                 .onGloballyPositioned { selfOrigin = it.boundsInRoot().topLeft }
-                // 吞手势：点击与拖动都要拦。只拦点击时，横向拖动会冒到父层那些
-                // 挂了 tabSwipe / stageSwipe 的容器上，教程期间就把页面切走了。
-                .pointerInput(Unit) { detectTapGestures { } }
-                .pointerInput(Unit) { detectDragGestures(onDrag = { _, _ -> }) }
         ) {
             if (hasHole) {
                 /*
@@ -236,13 +245,84 @@ fun TutorialOverlay(
             }
         }
 
+        /*
+         * ---------- 洞外的四块「挡板」 ----------
+         *
+         * 遮罩只画不拦，拦截全部交给这四块紧贴洞外沿的矩形。
+         * 它们拼起来正好是「整屏减去洞」，于是：
+         * · 洞里没有任何覆盖层 → 被高亮的那颗按钮能真的点到（聚光灯引导的本意）；
+         * · 洞外仍然吞掉一切 → 点不到看不见的控件，横滑也不会冒到父层切标签。
+         *
+         * 四块都用 `fillMaxSize` + 背景透明，只靠尺寸与偏移摆放；
+         * 没有洞时（整屏说明）退化成一块盖满的挡板。
+         *
+         * clip=false：挡板本身不画东西，只在洞的精确边界处占位，
+         * 若让它参与裁剪，圆角处会漏出一条可点的缝。
+         */
+        if (hasHole) {
+            // BoxWithConstraints 作用域里没有 DrawScope 的 size，
+            // 屏幕尺寸取自 maxWidth/maxHeight（同样以像素换算）
+            val fullHeightPx = with(density) { maxHeight.toPx() }
+            val fullWidthPx = with(density) { maxWidth.toPx() }
+            val holeTop = hole.top.coerceAtLeast(0f)
+            val holeBottom = hole.bottom.coerceAtMost(fullHeightPx)
+            val holeLeft = hole.left.coerceAtLeast(0f)
+            val holeRight = hole.right.coerceAtMost(fullWidthPx)
+            // 上挡板
+            ScrimBlocker(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(with(density) { holeTop.toDp() })
+                    .align(Alignment.TopStart)
+            )
+            // 下挡板
+            ScrimBlocker(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(with(density) { (fullHeightPx - holeBottom).coerceAtLeast(0f).toDp() })
+                    .align(Alignment.BottomStart)
+            )
+            // 左挡板（洞的上下之间那一段）
+            ScrimBlocker(
+                modifier = Modifier
+                    .width(with(density) { holeLeft.toDp() })
+                    .height(with(density) { (holeBottom - holeTop).coerceAtLeast(0f).toDp() })
+                    .align(Alignment.TopStart)
+                    .offset(y = with(density) { holeTop.toDp() })
+            )
+            // 右挡板（同理）
+            ScrimBlocker(
+                modifier = Modifier
+                    .width(with(density) { (fullWidthPx - holeRight).coerceAtLeast(0f).toDp() })
+                    .height(with(density) { (holeBottom - holeTop).coerceAtLeast(0f).toDp() })
+                    .align(Alignment.TopEnd)
+                    .offset(y = with(density) { holeTop.toDp() })
+            )
+        } else {
+            // 没有目标：整屏都该被拦住
+            ScrimBlocker(modifier = Modifier.fillMaxSize())
+        }
+
         // ---------- 气泡 ----------
         /*
-         * 位置规则：洞在屏幕中线以上 → 气泡摆到下面；洞在下 → 摆到上面。
-         * 永远不盖住被讲解的东西 —— 教程盖住自己正在讲的那个控件，等于没讲。
-         * 没有洞（整体说明）时摆下半屏，视觉重心更稳。
+         * 位置规则：把气泡摆在**洞外空间更大的那一侧**，而不是简单地比中线。
+         *
+         * 早先按「洞中心是否在屏幕中线以上」二分，在教程第 2 步（高亮整张单词卡）上
+         * 失效：卡片从 y≈363 一直到 2163，占满屏幕中部，上下两侧剩余空间差不多，
+         * 按中线判定会把气泡摆到下方、直接压住卡片下半部 —— 而那里正是这一步要讲的
+         * 熟练度圆点与「点击下方按钮查看释义」。教程盖住自己正在讲的东西，等于没讲。
+         *
+         * 现在按实际剩余高度选边：哪一侧放得下就放哪一侧；两侧都放不下（卡片几乎占满）
+         * 时选更大的一侧，并让气泡宽度收窄成「只占那一侧的空带」，
+         * 尽量少压住洞里的内容。
+         *
+         * 没有洞（整屏说明）时摆下半屏，视觉重心更稳。
          */
-        val bubbleBelow = hole.center.y < screenHeightPx / 2f
+        val spaceAbove = hole.top
+        val spaceBelow = screenHeightPx - hole.bottom
+        val bubbleBelow = spaceBelow >= spaceAbove
+        // 两侧都很窄时（洞几乎占满全屏）收窄气泡，避免它横跨整屏把卡片盖死
+        val cramped = maxOf(spaceAbove, spaceBelow) < with(density) { 240.dp.toPx() }
         TutorialBubble(
             step = step,
             stepIndex = stepIndex,
@@ -254,8 +334,25 @@ fun TutorialOverlay(
                 .padding(horizontal = 20.dp)
                 .padding(top = if (bubbleBelow) 0.dp else 40.dp)
                 .padding(bottom = if (bubbleBelow) 40.dp else 0.dp)
+                // 空间紧张时不再撑满整行宽度：横跨整屏会把洞里的内容压掉一大片
+                .then(if (cramped) Modifier.fillMaxWidth(0.92f) else Modifier.fillMaxWidth())
         )
     }
+}
+
+/**
+ * 挡板：透明、盖住指定区域、吞掉落在其中的全部手势。
+ *
+ * 只做输入拦截，不画任何东西（遮罩由上面那块 Canvas 画）。
+ * 点击与拖动都要吞：只吞点击时，横向拖动会冒到父层挂了 tabSwipe 的容器上。
+ */
+@Composable
+private fun ScrimBlocker(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .pointerInput(Unit) { detectTapGestures { } }
+            .pointerInput(Unit) { detectDragGestures(onDrag = { _, _ -> }) }
+    )
 }
 
 /** 教程气泡：步数 + 标题 + 说明 + 「跳过 / 下一步」 */

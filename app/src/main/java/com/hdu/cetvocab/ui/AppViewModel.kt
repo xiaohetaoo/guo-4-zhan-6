@@ -390,6 +390,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         notify(problem)
     }
 
+    /**
+     * 学习记录库损坏的提示只说一次。与 [reportWordbook] 同一套规矩。
+     *
+     * **为什么需要这个函数**：`UserDb` 早在 v1.4.6 就补上了与词库对称的损坏降级
+     * （`reading()` 兜底 + `UserDbStatus` 三态），`VocabRepository.userDataProblem`
+     * 也写好了那段措辞讲究的文案 —— 但**从来没有任何地方读过它**。
+     * 结果是：学习记录库损坏时，首页/词库/我的三页各自降级成 0 和空列表，
+     * 用户看到的只是「我的进度全没了」，而那句真正该说的话
+     * （「数据文件本身可能还在，请勿清空数据，先到设置里从备份恢复」）一句都没出现。
+     * 防护做了、话没说出口，等于没做。
+     *
+     * 去重理由同上：刷新入口有四个，不去重会连弹好几条一样的提示。
+     * 与词库分开记标记：两个库各自可能独立损坏，一个坏了不该把另一个的提示也吞掉。
+     */
+    private var userDataReported = false
+
+    private fun reportUserData() {
+        if (userDataReported) return
+        val problem = repo.userDataProblem ?: return
+        userDataReported = true
+        notify(problem)
+    }
+
     // ---------- 首页 ----------
 
     fun refreshHome() {
@@ -421,6 +444,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             _home.value = data
             reportWordbook()
+            reportUserData()
         }
     }
 
@@ -673,6 +697,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     searchTruncated = if (sameStage) old.searchTruncated else false
                 )
             }
+            reportUserData()
         }
     }
 
@@ -2092,6 +2117,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     soundEnabled = old.soundEnabled
                 )
             }
+            reportUserData()
         }
     }
 

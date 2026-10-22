@@ -493,21 +493,28 @@ private fun StageSwitch(stage: Int, onSelect: (Int) -> Unit) {
                     (
                         slideInHorizontally(Motion.spatial()) { it / 2 } +
                             fadeIn(Motion.effects()) +
-                            scaleIn(Motion.spatialPop(), initialScale = 0.88f)
+                            /*
+                             * 缩放用 [Motion.spatialSnappy] 而不是 spatialPop：
+                             * spatialPop 的阻尼比是 0.62，阶跃响应过冲约 8.35%，
+                             * 把 0.88→1.0 的缩放套上它会冲到约 0.95 再回弹 ——
+                             * 在小控件里看起来是「字抖了一下」，而不是「弹进来」。
+                             * 过冲只该留给位移（指示器色块），缩放一律用临界阻尼。
+                             */
+                            scaleIn(Motion.spatialSnappy(), initialScale = 0.88f)
                         ).togetherWith(
                         slideOutHorizontally(Motion.spatial()) { -it / 2 } +
                             fadeOut(Motion.effects()) +
-                            scaleOut(Motion.spatialPop(), targetScale = 0.88f)
+                            scaleOut(Motion.spatialSnappy(), targetScale = 0.88f)
                     )
                 } else {
                     (
                         slideInHorizontally(Motion.spatial()) { -it / 2 } +
                             fadeIn(Motion.effects()) +
-                            scaleIn(Motion.spatialPop(), initialScale = 0.88f)
+                            scaleIn(Motion.spatialSnappy(), initialScale = 0.88f)
                         ).togetherWith(
                         slideOutHorizontally(Motion.spatial()) { it / 2 } +
                             fadeOut(Motion.effects()) +
-                            scaleOut(Motion.spatialPop(), targetScale = 0.88f)
+                            scaleOut(Motion.spatialSnappy(), targetScale = 0.88f)
                     )
                 }
             },

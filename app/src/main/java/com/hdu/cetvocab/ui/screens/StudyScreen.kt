@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -240,10 +239,6 @@ fun StudyScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                // 教程第 1 步讲「这一张卡正反面各有什么」，框住整张卡
-                .then(
-                    if (state.tutorialActive) Modifier.tutorialAnchor(anchors[1]) else Modifier
-                )
         ) {
             /*
              * 翻卡用「绕 Y 轴真翻转」，不用 Crossfade。
@@ -294,6 +289,7 @@ fun StudyScreen(
                         level = state.currentLevel,
                         // 教程第 2 步框发音键、第 3 步框收藏键；
                         // 传 null 时这两个控件不挂定位修饰符，正常使用时零开销。
+                        wordBlockAnchor = if (state.tutorialActive) anchors[1] else null,
                         speakAnchor = if (state.tutorialActive) anchors[2] else null,
                         favAnchor = if (state.tutorialActive) anchors[3] else null
                     )
@@ -417,6 +413,13 @@ private fun buildTutorialSteps(
         title = "先自己想，再翻面",
         body = "正面只有单词和音标，先在心里回忆词义；" +
             "背面是释义、例句、词根词缀和联想记忆，帮你记牢它。",
+        // 只框「单词 + 音标」这一块，不框整张卡。
+        //
+        // 原先框整张卡，实测洞从 y≈363 一直到 2311（屏幕 2560），
+        // 上下只剩 91dp / 62dp —— 气泡本身约 100dp 高，两边都塞不下，
+        // 只能压在卡片下半部，正好盖住这一步要讲的熟练度圆点与「查看释义」。
+        // 教程盖住自己正在讲的东西，等于没讲。缩小到这一步真正指的内容之后，
+        // 下方腾出大半屏，气泡就落在洞外了。
         target = anchors.getOrNull(1)
     ),
     TutorialStep(
@@ -446,6 +449,8 @@ private fun CardFront(
     vm: AppViewModel,
     fav: Boolean,
     level: Int,
+    /** 教程第 1 步要框的「单词 + 音标」块；null 表示不在教程里 */
+    wordBlockAnchor: TutorialAnchor? = null,
     /** 教程第 2 步要框的发音键；null 表示不在教程里 */
     speakAnchor: TutorialAnchor? = null,
     /** 教程第 3 步要框的收藏键；null 表示不在教程里 */
@@ -467,14 +472,15 @@ private fun CardFront(
             // 芯片仍停在卡片右缘；这一行上面有 weight(1f) 的弹性空隙，
             // 多出的 6dp 由它吸收，卡片里其它内容不动。
             //
-            // 教程锚点挂在外层 wrapContentSize 的 Box 上，理由同下面那颗喇叭：
-            // HitArea 内部的 Box 套了 sizeIn(minWidth/minHeight)，在 Row 里会被
-            // 量成整行剩余宽度，直接把锚点传进去会得到一条竖长的空框。
-            Box(Modifier.wrapContentSize()) {
+            // 教程锚点挂在外层**显式尺寸**的 Box 上，理由同下面那颗喇叭：
+            // wrapContentSize 在这里不起作用（父 Row 不给子项宽度约束），
+            // 实测会报出 44×300dp 的竖长空框。尺寸必须与 HitArea 的 min 一致。
+            val favSize = 44.dp
+            Box(Modifier.size(favSize)) {
                 HitArea(
                     onClick = { vm.toggleFavCurrent() },
                     interaction = favInteraction,
-                    min = 44.dp,
+                    min = favSize,
                     align = Alignment.CenterEnd,
                     contentDescription = favLabel,
                     // 教程第 3 步框这颗心形
@@ -508,37 +514,65 @@ private fun CardFront(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = word.word,
-                fontSize = 40.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center
-            )
-            if (word.phonetic.isNotBlank()) {
-                Spacer(Modifier.height(10.dp))
+            /*
+             * 教程第 1 步框「单词 + 音标」这一块，**不含**下面的发音键。
+             *
+             * 三点说明：
+             * ① 不框整张卡：整张卡从 y≈363 到 2311（屏高 2560），上下只剩
+             *    91dp / 62dp，而气泡本身约 100dp 高 —— 两边都塞不下，只能压在
+             *    卡片下半部，正好盖住这一步要讲的熟练度圆点与「查看释义」。
+             *    缩小到真正指的内容之后，下方腾出大半屏，气泡落在洞外。
+             * ② 不包含发音键：那是第 2 步（anchors[2]）的目标，两个洞互相包含
+             *    会让第 1 步看起来「什么都没缩」，也会让第 2 步的聚焦感消失。
+             * ③ 挂在显式尺寸的 Column 外层 Box 上，理由同下面那颗喇叭 ——
+             *    fillMaxWidth 的容器会被父级撑满，锚点会报出整行宽。
+             */
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = if (wordBlockAnchor != null) {
+                    Modifier.tutorialAnchor(wordBlockAnchor)
+                } else Modifier
+            ) {
                 Text(
-                    text = word.phonetic,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = word.word,
+                    fontSize = 40.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center
                 )
+                if (word.phonetic.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = word.phonetic,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
             Spacer(Modifier.height(20.dp))
             /*
-             * 锚点必须挂在**外层** Box 上，不能直接传给 SpeakButton。
+             * 锚点必须挂在**显式尺寸**的 Box 上。
              *
-             * SpeakButton 内部是 `modifier.size(min)` 再套一层 size(size) 的圆，
-             * 它把这个 modifier 应用在自己最外层的 Box 上 —— 而那个 Box 在
-             * Column(CenterHorizontally) 里会被量成 fillMaxWidth 的槽位，
-             * 上报出来的矩形实测是 145×300dp 的竖长条，高亮圈会框住一大片空白。
-             * 外面包一层 wrapContentSize 的 Box，尺寸就正好是那颗 56dp 的圆。
+             * 这里踩过两次坑，记下来免得再犯：
+             * ① 直接把 tutorialAnchor 传给 SpeakButton 不行 —— 它内部是
+             *    `modifier.size(min)` 再套一层 size(size) 的圆，而这个 modifier 是画在
+             *    内层圆上的，锚点却挂到了外层 Box 上，上报的是整条槽位。
+             * ② 外面包一层 `Modifier.wrapContentSize()` 也不行 —— 实测仍然报 78×198dp。
+             *    原因是父级 Column 的 horizontalAlignment = CenterHorizontally
+             *    **只影响摆放位置、不约束子项宽度**，子项拿到的最大约束仍是整列宽；
+             *    wrapContentSize 在「已被撑满」的测量里没有可收缩的信息。
+             *
+             * 真正可靠的做法是给 Box 一个确定的 size：约束一确定，
+             * boundsInRoot() 报出来的就是这颗 56dp 的圆，与视觉完全一致。
+             * 这个尺寸必须与下面 SpeakButton 的 size 保持一致，改一处要连另一处一起改。
              */
-            Box(Modifier.wrapContentSize()) {
+            val speakSize = 56.dp
+            Box(Modifier.size(speakSize)) {
                 SpeakButton(
                     text = word.word,
                     onSpeak = speak,
-                    size = 56.dp,
+                    size = speakSize,
                     modifier = if (speakAnchor != null) {
                         Modifier.tutorialAnchor(speakAnchor)
                     } else Modifier
