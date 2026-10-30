@@ -363,6 +363,17 @@ class WordDb(private val context: Context) {
     @Volatile
     private var canonicalIds: Map<Int, Int>? = null
 
+    /**
+     * [canonicalIds] 的写入锁，与 [openLock] 分开。
+     *
+     * 之前复用 [openLock]，而它同时护着「打开/重拷词库」这条慢路径（跨进程 + 文件拷贝，
+     * 词库损坏自愈时可达数百毫秒）。于是任何一次 canonicalMap() 首次调用都可能
+     * 在赋值那一步被一次正在进行的词库打开挡住 —— 挡住的代价与要保护的事情完全不成比例。
+     * 缓存字段本身是 @Volatile 且只在这里写一次，一把独立锁足够。
+     * （built 的重复计算是无害的：同一份词库算出的映射必然相同，先写者胜出。）
+     */
+    private val canonicalLock = Any()
+
     private fun canonicalMap(): Map<Int, Int> {
         canonicalIds?.let { return it }
         // 词库不可用时返回空表：distinctWordCount 于是退化成「按 id 计数」。
@@ -385,7 +396,7 @@ class WordDb(private val context: Context) {
             minIdOfWord.clear()
             map
         } ?: return emptyMap()
-        synchronized(openLock) { canonicalIds = built }
+        synchronized(canonicalLock) { canonicalIds = built }
         return built
     }
 

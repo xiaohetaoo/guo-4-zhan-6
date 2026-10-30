@@ -118,11 +118,17 @@ class MainActivity : ComponentActivity() {
         // LauncherIcons 只需要 Context 拿 PackageManager，Application 完全够用。
         app.appScope.launch {
             // 失败不在这里直接提示：应用此刻已经在后台，Snackbar 没人看得见。
-            // 交给 onIconApplyFailed() 存起来，下次回到前台补一句（K10）。
+            // 交给 ViewModel 存起来，下次回到前台补一句（K10）。
+            // FAILED 与 DISABLED 分开播报：前者是「这台设备写不进去」，
+            // 后者是「这台设备压根没有这个入口」，对用户的话不一样。
             val result = runCatching {
                 LauncherIcons.apply(app, app.repo.iconStyle, app.repo.stage)
             }.getOrDefault(LauncherIcons.ApplyResult.FAILED)
-            if (result == LauncherIcons.ApplyResult.FAILED) vm.onIconApplyFailed()
+            when (result) {
+                LauncherIcons.ApplyResult.FAILED -> vm.onIconApplyFailed()
+                LauncherIcons.ApplyResult.DISABLED -> vm.onIconUnavailable()
+                else -> Unit
+            }
         }
     }
 }

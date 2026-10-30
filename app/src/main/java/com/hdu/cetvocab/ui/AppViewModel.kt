@@ -504,8 +504,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pendingIconNotice: String? = null
 
+    /** 写入被系统拒绝（入口存在，但这次没写进去）。 */
     fun onIconApplyFailed() {
         pendingIconNotice = "桌面图标没能切换，已保留原来的图标"
+    }
+
+    /**
+     * 这台设备上根本没有要启用的那个入口（[LauncherIcons.ApplyResult.DISABLED]）。
+     *
+     * 与 [onIconApplyFailed] 分开，是因为给用户的话不同：这里不是「这次失败了」，
+     * 而是「这台设备的桌面不支持这个图标样式」，重试没有意义。
+     * 措辞与 [setIconStyle] 点击前探测失败时那句保持一致，
+     * 免得同一个原因在两条路径上说成两件事。
+     */
+    fun onIconUnavailable() {
+        pendingIconNotice = "这台设备的桌面不允许本应用切换图标，已保留原来的图标"
     }
 
     /** 切换明暗模式：跟随系统 / 始终浅色 / 始终深色。 */

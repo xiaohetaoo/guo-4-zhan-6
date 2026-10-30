@@ -42,8 +42,26 @@ object LauncherIcons {
         /** 系统状态本来就是对的，没有产生任何写入 */
         UNCHANGED,
 
-        /** 写入失败或收尾后仍不是「恰好启用目标入口」 */
-        FAILED
+        /**
+         * 写入失败，或收尾后仍不是「恰好启用目标入口」。
+         *
+         * 与 [DISABLED] 的区别是「谁的问题」：FAILED 说明目标入口在这台设备上确实存在，
+         * 但系统拒绝了这次写入；DISABLED 说明这台设备上根本没有这个入口。
+         * 两者要对用户说不同的话，所以不能合成一个值。
+         */
+        FAILED,
+
+        /**
+         * 目标入口在本机不存在（[isAvailable] 判定为假）。
+         *
+         * 为什么必须单独判一次、不能指望后面的自检兜住：入口不存在时
+         * `setComponentEnabledSetting()` **不会报错** —— 它只是把「想启用这个组件」
+         * 记进包管理器的偏好；而 [isEnabled] 恰好也读这条偏好，于是
+         * 「写入成功」与「此刻生效的入口正是想要的」同时成立，
+         * [apply] 会返回 APPLIED，桌面上却什么都没发生。
+         * 这个失败骗得过后面的每一步自检，只能在写入之前先问「这个入口真的在吗」。
+         */
+        DISABLED
     }
 
     private const val DEFAULT = "com.hdu.cetvocab.LauncherDefault"
@@ -171,6 +189,21 @@ object LauncherIcons {
     @Synchronized
     fun apply(context: Context, style: Int, stage: Int): ApplyResult {
         val want = targetAlias(style, stage)
+
+        /*
+         * 第零步：先确认目标入口真的在这台设备上。
+         *
+         * 必须在任何写入之前做，因为「入口不存在」这个失败是自检抓不到的：
+         * setComponentEnabledSetting() 对不存在的组件不报错，只写一条偏好，
+         * 而自检读的正是同一条偏好，于是写入与自检会一起「成功」。
+         * 冷启动（CetVocabApp）与退到后台（MainActivity.onStop）两条路径都走这里，
+         * 设置页那次点击前的探测（AppViewModel.setIconStyle）挡不住它们。
+         */
+        if (!isAvailable(context, want)) {
+            ensureExactlyOne(context)
+            return ApplyResult.DISABLED
+        }
+
         val before = ALL.associateWith { isEnabled(context, it) }
 
         // 第一步：先确保目标入口启用。失败则保持现状并收敛不变量后返回。
@@ -192,19 +225,39 @@ object LauncherIcons {
     }
 
     /**
-     * 目标入口在这台设备上是否真实存在。
+     * 这台设备上有没有 [alias] 这个入口（看清单声明，不看启用状态）。
      *
-     * `activity-alias` 声明在包里，理论上一定在，但两种情况下拿不到：
-     * ROM 把未使用的组件裁掉，或用户在「应用管理」里手动禁用了某个 alias。
-     * 此时 [apply] 的每次写入都会失败，设置页就不该承诺「回到桌面即可看到」。
-     * 读组件状态本身就是跨进程调用，失败时抛 NameNotFoundException，这里收成 false。
+     * `activity-alias` 声明在包里，理论上一定在，但 ROM 把未使用的组件裁掉时就没了。
+     *
+     * 判的是「存在」而不是「可用」：若用户在系统里把某个入口禁用，
+     * 本方法仍返回 true（组件还在），后续写入是否成功交给 [apply] 的返回值去说
+     * ——「这台设备没有这个入口」和「有，但这次没启用成功」不是同一件事，
+     * 提示语也不该一样。
+     *
+     * ## 为什么不能用 getComponentEnabledSetting 判断
+     * 它查的是**包管理器里存的那条偏好**，不是组件是否存在：
+     * 对一个根本不存在的组件，AOSP 的实现照样返回
+     * `COMPONENT_ENABLED_STATE_DEFAULT`，一次异常都不会抛。
+     * 用它来判断存在性，任何时候都得到 true —— 等于没判。
+     * （历史实现就是这么写的，于是 [com.hdu.cetvocab.ui.AppViewModel.setIconStyle]
+     * 里那次「点击前先探一下」永远探测不到，承诺照旧给出去。）
+     *
+     * 这里改成查包信息的组件清单。必须带 `MATCH_DISABLED_COMPONENTS`：
+     * [SI] 与 [LIU] 在清单里就是 `android:enabled="false"`，
+     * 不带这个 flag 会把它们过滤掉，于是「简洁图标」永远被判成不存在 ——
+     * 那比原实现更糟：会把一个本来能用的功能整个关掉。
+     *
+     * 查询本身失败（理论上不该发生在自己包上）时返回 true：宁可漏报，
+     * 也不要因为一次查询异常就把用户的图标切换入口锁死。
      */
-    fun isAvailable(context: Context, alias: String): Boolean =
-        runCatching {
-            context.packageManager.getComponentEnabledSetting(
-                ComponentName(context.packageName, alias)
-            )
-        }.isSuccess
+    fun isAvailable(context: Context, alias: String): Boolean = runCatching {
+        @Suppress("DEPRECATION")
+        val info = context.packageManager.getPackageInfo(
+            context.packageName,
+            PackageManager.GET_ACTIVITIES or PackageManager.MATCH_DISABLED_COMPONENTS
+        )
+        info.activities?.any { it.name == alias } == true
+    }.getOrDefault(true)
 
     /**
      * 桌面**现在**用的是哪种图标；读不出来返回 null（不猜）。

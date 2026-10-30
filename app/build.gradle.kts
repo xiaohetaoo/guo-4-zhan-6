@@ -63,8 +63,19 @@ android {
         //   ③ 气泡压住被讲解的内容 —— 按实际剩余空间选边 + 第 2 步缩小高亮到「单词+音标」；
         //   ④ userDataProblem 写了但全仓库零调用，用户库损坏时那句话从没出现 —— 接入三条刷新链路；
         //   ⑤ 弹簧过冲被用在缩放上导致「字抖一下」—— 缩放换回临界阻尼。
-        versionCode = 49
-        versionName = "1.4.8"
+        // v1.4.9 = 桌面图标切换的两处修复：
+        //   ① isAvailable() 用 getComponentEnabledSetting() 判组件是否存在，
+        //      而这个 API 对不存在的组件照样返回 DEFAULT、从不抛异常，于是
+        //      「点击前先探一下」永远探测不到，设置页在拿不到入口的设备上
+        //      照旧承诺「回到桌面即可看到」—— 改查包信息的组件清单；
+        //   ② 入口不存在时 setComponentEnabledSetting() 不报错、只写一条偏好，
+        //      而自检读的正是这条偏好，于是写入与自检一起「成功」，apply() 返回
+        //      APPLIED 但桌面毫无变化 —— 在写入前先判存在性，返回 DISABLED，
+        //      并与 FAILED 分开播报（前者重试无意义，后者是这次没写进去）。
+        //   另：词库 canonicalIds 的写入锁与 openLock 拆开，首次去重映射不再
+        //   排在一次词库打开（损坏自愈时可达数百毫秒）后面。
+        versionCode = 50
+        versionName = "1.4.9"
         vectorDrawables { useSupportLibrary = true }
     }
 
