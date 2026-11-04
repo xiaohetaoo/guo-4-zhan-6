@@ -258,6 +258,40 @@ class VocabRepository(context: Context) {
     }
 
     /**
+     * 取某个词的作答前快照，供「返回上一个词」做精确还原。
+     *
+     * 单独开一个方法而不是让 ViewModel 直接摸 [userDb]：那样会把
+     * `userDb` 的可见性放宽，而它是本类刻意封装的（外部只该看到 Repository 口径）。
+     */
+    fun stateSnapshot(wordId: Int): WordState = userDb.stateOf(wordId)
+
+    /**
+     * 撤销一次作答：状态回滚到 [prev] 并删掉那条学习日志。
+     *
+     * 两个动作必须成对：详见 [UserDb.restoreState] 与 [UserDb.deleteLatestLog]。
+     *
+     * @return 是否成功撤销（日志没删掉时返回 false，调用方据此决定是否提示）
+     */
+    fun undoAnswer(prev: WordState): Boolean {
+        userDb.restoreState(prev)
+        return userDb.deleteLatestLog(prev.wordId)
+    }
+
+    /**
+     * 一键把高中课标词标为已学会，返回实际改动的词数。
+     *
+     * 2604 个词在一个事务里写完（[UserDb.markBatchLearned]），调用方在 IO 线程跑。
+     */
+    fun markHighSchoolLearned(): Int {
+        val ids = wordDb.highSchoolWordIds()
+        if (ids.isEmpty()) return 0
+        return userDb.markBatchLearned(ids)
+    }
+
+    /** 高中课标词总数（设置页在按钮副标题里如实写出「将标记 N 个」） */
+    fun highSchoolWordCount(): Int = wordDb.highSchoolWordCount()
+
+    /**
      * 切换收藏并返回新值。
      *
      * 翻转动作下沉到 [UserDb.toggleFav]，在同一个数据库事务里完成「读旧值 + 写新值」，

@@ -234,7 +234,7 @@ class WordDb(private val context: Context) {
             val list = ArrayList<Word>()
             d.rawQuery(
                 "SELECT id,word,phonetic,translation,trans_detail,definition,pos,stage,unit,rank," +
-                    "sentence,sentence_cn,roots,similar,mnemonic FROM words " +
+                    "sentence,sentence_cn,roots,similar,mnemonic,is_hs FROM words " +
                     "WHERE $selection " + (orderBy?.let { "ORDER BY $it" } ?: ""),
                 args
             ).use { c ->
@@ -255,7 +255,17 @@ class WordDb(private val context: Context) {
                             sentenceCn = c.getString(11) ?: "",
                             roots = c.getString(12) ?: "",
                             similar = c.getString(13) ?: "",
-                            mnemonic = c.getString(14) ?: ""
+                            mnemonic = c.getString(14) ?: "",
+                            /*
+                             * 用 getColumnIndex 而不是硬编码 15：
+                             * 老词库副本（v6，没有 is_hs 列）在升级后的
+                             * 极短窗口内仍可能被读到（拷贝尚未完成时 getWritable
+                             * 拿到的还是旧文件）。取不到列就返回 -1，
+                             * 这里按「不是高中词」降级，而不是让整次查询抛出
+                             * IllegalArgumentException 把词库页打成空列表。
+                             */
+                            isHighSchool = c.getColumnIndex("is_hs")
+                                .let { if (it >= 0) c.getInt(it) != 0 else false }
                         )
                     )
                 }
@@ -278,6 +288,54 @@ class WordDb(private val context: Context) {
 
     fun wordById(id: Int): Word? =
         queryWords("id=?", arrayOf(id.toString()), null).firstOrNull()
+
+    /**
+     * 全部「高中课标」不同单词的 id（口径见 [Word.isHighSchool]）。
+     *
+     * 同一个单词在四级段与六级段各占一行（六级是四级的超集），
+     * 所以这里按单词去重、每词只取一个 id（取 id 最小的那一行，
+     * 与 [canonicalMap] 的「同一单词用最小 id 作代表」口径一致）。
+     * 不去重的话会返回 5107 个 id，其中 2503 对指向同一个词 ——
+     * 批量标记会白写一遍，返回值也会虚报成五千多。
+     *
+     * 为什么不走 [queryWords] 再 map 出 id：那条路径要把整行 16 列
+     * 全部取出来拼成 [Word] 对象，调用方却只用得到 id。
+     *
+     * 词库副本仍是旧版（没有 is_hs 列）时返回空列表而不是抛异常：
+     * 正常情况下 [DB_VERSION] 升到 7 会强制重拷，这个窗口极短；
+     * 但万一重拷失败（磁盘满、目标文件被占用），空列表能让设置页如实说
+     * 「一个都没标上」，比让整页崩溃强。
+     */
+    fun highSchoolWordIds(): List<Int> =
+        reading(emptyList()) { d ->
+            runCatching {
+                d.rawQuery(
+                    "SELECT MIN(id) FROM words WHERE is_hs=1 GROUP BY word", null
+                ).use { c ->
+                    val list = ArrayList<Int>(2700)
+                    while (c.moveToNext()) list.add(c.getInt(0))
+                    list
+                }
+            }.getOrElse { emptyList() }
+        }
+
+    /**
+     * 高中课标词的数量 —— **按不同单词计**，不是按词库行数计。
+     *
+     * 这两个数不一样，别混用：words 表里同一个单词在四级段与六级段各有一行
+     * （六级是四级的超集），高中词因此占 5107 行、却只有 2604 个不同单词。
+     * 界面上说「共有 N 个词」时用户读的是「多少个单词」，所以这里按
+     * `word` 去重计数。行数口径会让设置页写出「共有 5107 个词」——
+     * 比真实多出近一倍，用户点完发现「已学会」只涨了两千多，会以为功能出了错。
+     */
+    fun highSchoolWordCount(): Int =
+        reading(0) { d ->
+            runCatching {
+                d.rawQuery(
+                    "SELECT COUNT(DISTINCT word) FROM words WHERE is_hs=1", null
+                ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+            }.getOrDefault(0)
+        }
 
     /**
      * 按单词原文精确取词，用于给「真题句子翻译」题挂上关键词词条
@@ -502,13 +560,17 @@ class WordDb(private val context: Context) {
         /**
          * v5：新增 translation_quiz（真题句子翻译题库）
          * v6：translation_quiz 扩充至 322 条（四级 161 / 六级 161）
+         * v7：words 新增 is_hs 列（高中课标标记，2604 词），
+         *     供设置页「一键把高中词汇标为已学会」使用
          *
          * 这个号不是 SQLite 的 user_version，而是「已安装到私有目录的词库版本号」：
          * 与 [open] 里记录在 SharedPreferences 的值不一致时才重新从 assets 复制。
-         * 因此只要内置词库内容有变（增删改题目），这里就必须 +1，
-         * 否则老用户升级后仍用着设备上的旧副本，看不到新题。
+         * 因此只要内置词库内容有变（增删改题目、加列），这里就必须 +1，
+         * 否则老用户升级后仍用着设备上的旧副本，看不到新列。
+         * v7 这条正是如此：不加号的话，老用户点「标记高中词」时会因为
+         * 设备上的副本没有 is_hs 列而把 0 个词标成已学会，还以为功能坏了。
          */
-        const val DB_VERSION = 6
+        const val DB_VERSION = 7
         const val STAGE_CET4 = 1
         const val STAGE_CET6 = 2
 

@@ -16,6 +16,7 @@ import com.hdu.cetvocab.data.QuizKind
 import com.hdu.cetvocab.data.QuizSpec
 import com.hdu.cetvocab.data.QuizAggregate
 import com.hdu.cetvocab.data.QuizQuestion
+import com.hdu.cetvocab.data.WordState
 import com.hdu.cetvocab.data.QuizRecord
 import com.hdu.cetvocab.data.QUIZ_SPEC_CONFUSABLE
 import com.hdu.cetvocab.data.QUIZ_SPEC_LETTER
@@ -608,12 +609,70 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         quizSnapshotCleared = false
                         _study.value = StudyUiState()
                         _quiz.value = QuizUiState()
+                        // 清空数据后撤销栈也必须作废：里面的快照指向已经不存在的状态，
+                        // 万一用户此刻正停在某个会话里按了「返回」，会把旧数据写回来。
+                        undoStack.clear()
                         // prefsFromRepo=true：resetAll 里 prefs.edit().clear() 把设置全恢复成默认，
                         // _profile 里缓存的旧设置必须整体作废，否则各开关显示的还是清空前的状态。
                         refreshAll(prefsFromRepo = true)
                         notify("学习数据已清空")
                     }
                     .onFailure { _fileError.value = fileErrorMessage("没能清空数据", it) }
+            } finally {
+                _fileBusy.value = false
+            }
+        }
+    }
+
+    /**
+     * 高中课标词总数，设置页在按钮副标题里如实写出「共有 N 个」。
+     *
+     * 是挂起函数而不是普通 getter：它要读词库，而词库首次打开会拷贝 7.98 MB，
+     * 不能让调用方在组合期直接同步调用。调用方负责切到 IO 线程。
+     */
+    suspend fun highSchoolWordCount(): Int = withContext(Dispatchers.IO) {
+        repo.highSchoolWordCount()
+    }
+
+    /**
+     * 一键把高中课标词标为已学会。
+     *
+     * 语义是「已学会 = 熟悉（level 3）」，为什么不是精通、为什么给 30 天间隔，
+     * 见 [com.hdu.cetvocab.data.UserDb.markBatchLearned] 的注释。
+     *
+     * ## 必须一并评估成就
+     * `evaluateAchievements()` 是按 `wordDb.distinctWordCount(learnedIds)` 算
+     * 「累计学习词数」的，一次标进 2604 个词会让「累计学习 500」「1000」「2000」
+     * 这类成就全部达标。不评估的话，用户会看到「已学 2604 词」而成就页仍是
+     * 0/81 —— 功能自己的副作用没有走完，看起来像坏了。
+     * 这里只在**真有改动**时评估：没改动就没什么新达标的条件，
+     * 白白跑一遍全量统计既慢又可能扰动已有状态。
+     *
+     * 用 [fileBusy] 做互斥：这是一次 2600 多行的事务写入，
+     * 与导出/备份/恢复共用同一个「文件任务进行中」的闸门，
+     * 避免用户连点两次、或与清空数据并发。
+     */
+    fun markHighSchoolLearned() {
+        if (_fileBusy.value) return
+        _fileBusy.value = true
+        viewModelScope.launch {
+            try {
+                val applied = withContext(Dispatchers.IO) { repo.markHighSchoolLearned() }
+                if (applied > 0) {
+                    // 成就评估要在写完之后，否则统计到的是旧数据
+                    val gained = withContext(Dispatchers.IO) { repo.evaluateAchievements() }
+                    // 「标了多少」要如实报：其中有一部分用户可能早就学过，
+                    // 报总词数会让「已学会」的增量看起来比实际大。
+                    notify(
+                        if (gained.isEmpty()) "已把 $applied 个高中词汇标为已学会"
+                        else "已把 $applied 个高中词汇标为已学会，同时解锁 ${gained.size} 项成就"
+                    )
+                } else {
+                    notify("高中词汇此前都已标记过，无需重复操作")
+                }
+                refreshAll()
+            } catch (e: Exception) {
+                _fileError.value = fileErrorMessage("没能标记高中词汇", e)
             } finally {
                 _fileBusy.value = false
             }
@@ -884,6 +943,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // 都是用过一阵子才会去找的入口，那时候弹教程只会碍事）。
             tutorialStep = if (showTutorial) 0 else null
         )
+        // 新会话开始，上一场的撤销记录全部作废：
+        // 那些快照指向的是旧队列的位置，留着会让「返回」跳到别的一场里去。
+        undoStack.clear()
         onReady(true)
     }
 
@@ -989,6 +1051,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         answering = true
         viewModelScope.launch {
             try {
+                /*
+                 * 作答前的状态快照，存入撤销栈。
+                 *
+                 * 取在 answerWord **之前**：它必须反映「这次作答之前」的
+                 * word_state，`stepBack` 才能做逐字段精确还原（SM-2 不可逆，
+                 * 详见 UserDb.restoreState 的注释）。
+                 *
+                 * 同时记下这次答的是什么、第几个词、当时的计数器值 ——
+                 * stepBack 要据此把 knownCount / unknownCount 也退回去，
+                 * 否则「认识 N」这个顶部标签会比实际多算一个。
+                 */
+                val prevState = withContext(Dispatchers.IO) { repo.stateSnapshot(word.id) }
                 // 写库、取下一个词的等级、评估成就，一次 IO 里做完，避免主线程碰数据库
                 val nextWordLevel = withContext(Dispatchers.IO) {
                     repo.answerWord(word, known)
@@ -1001,6 +1075,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     if (s.queue !== snapshot.queue) return@update s
                     val next = s.index + 1
                     val done = next >= s.queue.size
+                    // 压栈只在这场会话内有效，队列换了就整栈作废（见 startStudy）
+                    undoStack.addLast(UndoEntry(snapshot.index, word.id, prevState, known))
                     s.copy(
                         index = next,
                         flipped = false,
@@ -1022,6 +1098,82 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     flushStudyTimer()
                     refreshHome()
                 }
+            } finally {
+                answering = false
+            }
+        }
+    }
+
+    /**
+     * 一次作答的撤销记录，供学习页「返回上一个词」使用。
+     *
+     * 存的是**作答前**的完整状态快照而不是「答了什么」，因为 SM-2 不可逆
+     * （ease 的更新依赖 q、interval 是乘性递推），反向推算会累积误差；
+     * 逐字段还原快照才是精确的。
+     */
+    private data class UndoEntry(
+        /** 这次作答发生在队列的第几个位置 */
+        val index: Int,
+        val wordId: Int,
+        /** 作答前的 word_state 快照 */
+        val prev: WordState,
+        /** 当时选的是「认识」还是「待加强」，用于把计数器退回去 */
+        val known: Boolean
+    )
+
+    /** 撤销栈。只在当前这场学习会话内有效，[startStudy] 会清空。 */
+    private val undoStack = ArrayDeque<UndoEntry>()
+
+    /** 当前是否可以「返回上一个词」：栈非空、且没有别的写操作在跑 */
+    val canStepBack: Boolean
+        get() = undoStack.isNotEmpty() && !answering
+
+    /**
+     * 返回上一个词：界面退一格，并把库里那次作答整体撤销。
+     *
+     * ## 为什么必须连库一起撤
+     * [answerCurrent] 做了三件事：改 word_state（SM-2 参数）、写一条 study_log、
+     * 累加顶部计数器。只把 index 往回拨一格的话：
+     *  · 这个词会被再答一次，累计学习、正确率、连续打卡全部虚高一份；
+     *  · 错词本按 wrong_count 计数，连撤两次能把一个词凭空撤出/撤进错词本；
+     *  · SM-2 的 reps 被推进两次，间隔从 1 天直接跳到 6 天 ——
+     *    而用户其实只答了一次。
+     * 所以「返回」= 状态还原 + 日志删除 + 计数器回退，三件事一起做。
+     *
+     * ## 为什么不允许在结算页撤
+     * 结算页已经把成绩落库并刷新了首页（见 [answerCurrent] 末尾的 refreshHome），
+     * 从这里退回去会留下一场「结算过又没结算」的会话，且没有任何幂等的收尾手段。
+     * 页面侧据此把按钮隐藏（见 StudyScreen 的 `state.finished` 分支）。
+     *
+     * @return 是否真的退回去了。栈空时返回 false（按钮本就不该可点）。
+     */
+    fun stepBack() {
+        if (answering) return
+        val entry = undoStack.removeLastOrNull() ?: return
+        answering = true
+        viewModelScope.launch {
+            try {
+                val undone = withContext(Dispatchers.IO) { repo.undoAnswer(entry.prev) }
+                _study.update { s ->
+                    /*
+                     * 会话已被换掉时不要乱改：队列不是同一份，
+                     * 栈里的 index 指向的是旧队列的位置。
+                     * undoStack 在 startStudy 里已经清空，这里只是防御性检查。
+                     */
+                    if (s.finished) return@update s
+                    s.copy(
+                        index = entry.index,
+                        flipped = false,
+                        knownCount = s.knownCount - if (entry.known) 1 else 0,
+                        unknownCount = s.unknownCount - if (entry.known) 0 else 1,
+                        currentLevel = entry.prev.level,
+                        finished = false
+                    )
+                }
+                if (!undone) notify("这一步已退回，但上次的记录没能完全撤回")
+                // 首页的「今日已学」是按 study_log 聚合的，撤掉一条就要重算
+                refreshHome()
+                refreshProfile()
             } finally {
                 answering = false
             }

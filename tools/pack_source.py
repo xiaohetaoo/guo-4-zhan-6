@@ -19,6 +19,12 @@ OUT = _resolve("OUT", "CETVOCAB_SOURCE_ZIP",
 
 SKIP_DIRS = {".gradle", "build", ".idea", ".kotlin", "intermediate"}
 SKIP_FILES = {"local.properties", "cetvocab-release.jks"}
+# 备份与临时快照不该进交付包：
+#   · words_db_rollback.bak 是 v1.4.3 前后留下的一份旧词库快照（7.86 MB），
+#     没有任何源码价值，却让源码包凭空多出一大截体积；
+#   · words.db.before_hs.bak 由 tools/mark_highschool.py 生成（脚本已改为写到
+#     tools/_backup/，这里再兜一层，防止它又被写回 assets 或 tools/ 下）。
+SKIP_SUFFIXES = (".bak", ".tmp", ".log")
 
 INCLUDE_TOP = [
     "build.gradle.kts",
@@ -37,6 +43,8 @@ def should_skip(rel):
     if any(p in SKIP_DIRS for p in parts):
         return True
     if parts[-1] in SKIP_FILES:
+        return True
+    if parts[-1].endswith(SKIP_SUFFIXES):
         return True
     return False
 

@@ -74,8 +74,16 @@ android {
         //      并与 FAILED 分开播报（前者重试无意义，后者是这次没写进去）。
         //   另：词库 canonicalIds 的写入锁与 openLock 拆开，首次去重映射不再
         //   排在一次词库打开（损坏自愈时可达数百毫秒）后面。
-        versionCode = 50
-        versionName = "1.4.9"
+        // v1.4.10 = 两个新功能（修订号满 10 未进位，按项目规则继续累加）：
+        //   ① 学习页「返回上一个词」—— 界面退一格 + 库里那次作答整体撤销
+        //      （word_state 逐字段还原 + 删掉 study_log 那一条），
+        //      否则同一个词被答两次会让累计学习、正确率、连续打卡虚高；
+        //   ② 设置页「一键把高中词汇标为已学会」—— 口径为 ECDICT 的 gk 标签
+        //      （官方高考大纲 3677 词），词库交集 2604 词，标为「熟悉(level 3)」
+        //      而不是「精通」：既进入「熟悉以上」统计，又仍按间隔复习。
+        //   词库随之新增 is_hs 列，WordDb.DB_VERSION 6 → 7（否则老用户拿不到新列）。
+        versionCode = 51
+        versionName = "1.4.10"
         vectorDrawables { useSupportLibrary = true }
     }
 

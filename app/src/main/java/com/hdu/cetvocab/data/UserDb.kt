@@ -255,6 +255,140 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
     }
 
     /**
+     * 撤销一次作答：把 [wordId] 的状态整体写回 [prev]。
+     *
+     * 供学习页「返回上一个词」使用（见 `AppViewModel.stepBack`）。
+     * 为什么必须真的回写而不是只把界面索引退一格：`answerCurrent` 已经
+     * 改过 word_state 并往 study_log 插了一行，只退界面的话，
+     * 同一个词会被再答一次 —— 累计学习、正确率、连续打卡全部虚高，
+     * 而错词本里的 wrong_count 也会被扣两次或加两次。
+     *
+     * 这里**整体 REPLACE 回旧快照**（含 ease / reps / interval_days），
+     * 而不是「反向执行一遍 SM-2」：SM-2 不可逆（ease 的更新依赖 q，
+     * 且 interval 是乘性递推），反向推算必然累积误差。
+     * 快照是调用方在作答**之前**取的 [stateOf]，逐字段还原是精确的。
+     *
+     * @param prev 作答前的状态快照
+     */
+    fun restoreState(prev: WordState) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val cv = ContentValues().apply {
+                put("word_id", prev.wordId)
+                put("level", prev.level)
+                put("wrong_count", prev.wrongCount)
+                put("fav", if (prev.fav) 1 else 0)
+                put("last_ts", prev.lastTs)
+                put("next_review_ts", prev.nextReviewTs)
+                put("ease", prev.ease)
+                put("reps", prev.reps)
+                put("interval_days", prev.intervalDays)
+            }
+            db.insertWithOnConflict("word_state", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /**
+     * 删除某个词最近一条学习日志，返回是否真的删掉了。
+     *
+     * 与 [restoreState] 配对使用：只还原 word_state 而留着日志，
+     * 「今日已学」「累计学习」「连续打卡」这些按 study_log 聚合的统计
+     * 仍会把那次作废的作答算进去。
+     *
+     * 删的是**该词 ts 最大的那一条**而不是「今天那一条」：用户可能
+     * 隔天才回头改判（学习页不保存跨天会话，但 BACK 撤销发生在同一会话内），
+     * 按 ts 取最新一条与作答顺序严格对应。
+     */
+    fun deleteLatestLog(wordId: Int): Boolean {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val rowId = reading<Long?>(null) { d ->
+                d.rawQuery(
+                    "SELECT id FROM study_log WHERE word_id=? ORDER BY ts DESC, id DESC LIMIT 1",
+                    arrayOf(wordId.toString())
+                ).use { if (it.moveToFirst()) it.getLong(0) else null }
+            }
+            val deleted = rowId != null && db.delete("study_log", "id=?", arrayOf(rowId.toString())) > 0
+            db.setTransactionSuccessful()
+            return deleted
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /**
+     * 批量把一批词标记为「已学会」，返回实际写入的行数。
+     *
+     * 设置页「一键把高中词汇标为已学会」用这个入口。语义刻意定成
+     * 「**已学会** = level 3（熟悉）」，而不是 5（精通）：
+     *  · level ≥ 3 才算进「熟悉以上」这个统计口径（见 [WordState.level] 注释）；
+     *  · 标成 5 会让错词本把这些词直接移出、也不再进复习队列，
+     *    等于替用户断言「这些词你已经完全掌握」—— 一键操作不该有这种效力；
+     *  · level 3 让它们仍会在到期时进入复习队列，用户真想彻底压掉，
+     *    可以在词库页逐个降级。
+     *
+     * nextReviewTs 给「现在 + 一个较长间隔」而不是 0：0 表示「立刻到期」，
+     * 2604 个词会当场全部涌进今日队列，把每日目标冲垮。
+     * reps=0、intervalDays=0 保持中性，后续答对时按 SM-2 正常从 1 天起算。
+     *
+     * 已经在 level ≥ 3 的词不重复写（避免把 last_ts 刷成今天、
+     * 让「上次学习」这个显示变得没意义）。整批在一个事务里，
+     * 中途失败不会留下「标了一半」的状态。
+     *
+     * @return 真正从「未学会」变成「已学会」的行数
+     */
+    fun markBatchLearned(wordIds: Collection<Int>): Int {
+        if (wordIds.isEmpty()) return 0
+        val db = writableDatabase
+        val now = System.currentTimeMillis()
+        // 与 markLearned 同一口径：3 = 熟悉，进入「熟悉以上」统计
+        val level = 3
+        val nextReviewTs = now + 30L * 86_400_000L
+        var changed = 0
+        db.beginTransaction()
+        try {
+            // 先查已有状态，只对 level < 3 的下手；分批查避免 IN 变量数超 999
+            val existing = HashMap<Int, WordState>(wordIds.size)
+            wordIds.chunked(500).forEach { chunk ->
+                db.rawQuery(
+                    "SELECT $STATE_COLUMNS FROM word_state WHERE word_id IN (" +
+                        chunk.joinToString(",") + ")",
+                    null
+                ).use { c -> while (c.moveToNext()) c.toWordState().let { existing[it.wordId] = it } }
+            }
+            wordIds.chunked(500).forEach { chunk ->
+                chunk.forEach { id ->
+                    val old = existing[id]
+                    if (old != null && old.level >= level) return@forEach
+                    val cv = ContentValues().apply {
+                        put("word_id", id)
+                        put("level", level)
+                        // 保留既有的错词次数与收藏，一键标记不改这两项
+                        put("wrong_count", old?.wrongCount ?: 0)
+                        put("fav", if (old?.fav == true) 1 else 0)
+                        put("last_ts", now)
+                        put("next_review_ts", nextReviewTs)
+                        put("ease", old?.ease ?: 2.5)
+                        put("reps", old?.reps ?: 0)
+                        put("interval_days", old?.intervalDays ?: 0)
+                    }
+                    db.insertWithOnConflict("word_state", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+                    changed++
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return changed
+    }
+
+    /**
      * 切换收藏，返回切换后的新值。
      *
      * 「读旧值 → 取反 → 写回」必须在同一个事务里完成。

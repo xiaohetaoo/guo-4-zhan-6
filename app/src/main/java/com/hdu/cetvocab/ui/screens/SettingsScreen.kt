@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,6 +78,8 @@ import com.hdu.cetvocab.util.LauncherIcons
 import java.io.File
 import java.util.Locale
 import com.hdu.cetvocab.ui.theme.LocalAppColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @Composable
@@ -143,6 +146,19 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onReplayTutorial: () ->
         vm.loadBackups { files ->
             if (files.size == 1) restoreTarget = files.first() else restoreChoices = files
         }
+    }
+
+    /*
+     * 高中课标词的数量。进页面读一次即可（词库是只读的，这个数不会变）。
+     *
+     * 必须放到 IO 线程：这里可能在冷启动第一次进设置页时触发词库首次打开，
+     * 而「首次打开」包含把 7.98 MB 词库从 assets 拷到私有目录，
+     * 在主线程做会肉眼可见地卡一下。初始值 0 只是占位，
+     * 读到真值前副标题不提数字，不会说出一个错的数。
+     */
+    var hsCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        hsCount = vm.highSchoolWordCount()
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -244,6 +260,32 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onReplayTutorial: () ->
                         subtitle = "装一局今日学习，把五个步骤再讲一遍",
                         accent = MaterialTheme.colorScheme.primary,
                         onClick = { onReplayTutorial() }
+                    )
+                }
+            }
+
+            // ---------- 高中词汇 ----------
+            item {
+                AppCard {
+                    SectionTitle(text = "高中词汇")
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = if (hsCount > 0)
+                            "按官方课标（高考大纲）的词汇表，本词库里共有 $hsCount 个词属于高中范围。" +
+                                "如果这些词你早就背熟了，可以一次性标为已学会，" +
+                                "每日学习队列就会让位给还没掌握的四六级词。"
+                        else
+                            "按官方课标（高考大纲）的词汇表，本词库里的高中范围词汇可以一次性标为已学会，" +
+                                "每日学习队列就会让位给还没掌握的四六级词。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    MenuRow(
+                        title = "把高中词汇标为已学会",
+                        subtitle = if (fileBusy) "正在处理…" else "标记为「熟悉」，仍会按间隔复习；可随时在词库页逐个调整",
+                        accent = MaterialTheme.colorScheme.primary,
+                        onClick = { vm.markHighSchoolLearned() }
                     )
                 }
             }

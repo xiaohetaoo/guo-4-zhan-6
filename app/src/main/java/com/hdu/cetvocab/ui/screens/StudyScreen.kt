@@ -10,6 +10,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -366,6 +367,40 @@ fun StudyScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            /*
+             * 返回上一个词。
+             *
+             * 只在「已经答过至少一个」且不在结算页时出现 —— 第一个词没有上一个，
+             * 结算页则已经落库并刷新了首页（见 AppViewModel.stepBack 注释）。
+             * 用无底色的文字按钮而不是整块按钮：它是次要操作，
+             * 不该和下方 52dp 的主按钮抢注意力。
+             *
+             * 位置放在这一行而不是顶栏进度条里：顶栏整条是教程第 0 步的锚点，
+             * 往里加控件会把已经验收过的热区与布局尺寸改掉（v1.4.7 的教训）。
+             *
+             * 高度给足 44dp 可点区。interaction 记得自己开一个 ——
+             * 复用关闭键那个 source 会让两处的涟漪同时亮。
+             */
+            if (vm.canStepBack) {
+                val backInteraction = remember { MutableInteractionSource() }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .clickable(
+                            interactionSource = backInteraction,
+                            indication = LocalIndication.current,
+                            onClick = { vm.stepBack() }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "← 返回上一个词",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
         }

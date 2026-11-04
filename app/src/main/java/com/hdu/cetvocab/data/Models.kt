@@ -31,7 +31,17 @@ data class Word(
     /** 形近词，格式：word|释义;;word|释义 */
     val similar: String,
     /** 记忆提示（谐音 / 联想） */
-    val mnemonic: String
+    val mnemonic: String,
+    /**
+     * 是否属于**高中课标**（官方高考大纲）词。
+     *
+     * 口径来自 ECDICT 的 `gk` 标签，见 `tools/mark_highschool.py`。
+     * 本词库 6248 个不同词里有 2604 个落在这个名单内。
+     * 用途只有一个：设置页「一键把高中词汇标为已学会」按这个标记批量置位，
+     * 让已经背熟高中词的用户把每日队列让给真正没见过的四六级词。
+     * 它**不是**难度分级、也不参与任何出题排序 —— 别拿它当「简单词」判据。
+     */
+    val isHighSchool: Boolean = false
 ) {
     val similarList: List<Pair<String, String>>
         get() = similar.split(";;")
