@@ -562,6 +562,9 @@ class WordDb(private val context: Context) {
          * v6：translation_quiz 扩充至 322 条（四级 161 / 六级 161）
          * v7：words 新增 is_hs 列（高中课标标记，2604 词），
          *     供设置页「一键把高中词汇标为已学会」使用
+         * v8：全库文本修正（音标长音符 ':'→'ː'、西里尔 ә→ə、重音撇号→ˈ、
+         *     若干中文笔误与例句乱码）。词条与 rank 一个都没动，
+         *     只是内容变了，所以同样必须 +1 才能让老用户拿到修正后的副本。
          *
          * 这个号不是 SQLite 的 user_version，而是「已安装到私有目录的词库版本号」：
          * 与 [open] 里记录在 SharedPreferences 的值不一致时才重新从 assets 复制。
@@ -570,7 +573,7 @@ class WordDb(private val context: Context) {
          * v7 这条正是如此：不加号的话，老用户点「标记高中词」时会因为
          * 设备上的副本没有 is_hs 列而把 0 个词标成已学会，还以为功能坏了。
          */
-        const val DB_VERSION = 7
+        const val DB_VERSION = 8
         const val STAGE_CET4 = 1
         const val STAGE_CET6 = 2
 
