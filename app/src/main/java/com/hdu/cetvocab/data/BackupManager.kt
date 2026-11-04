@@ -266,7 +266,7 @@ class BackupManager(
                 put("stage", prefs.getInt(KEY_STAGE, WordDb.STAGE_CET4))
                 put("daily_goal", prefs.getInt(KEY_GOAL, 20))
                 put("auto_speak", prefs.getBoolean(KEY_AUTOSPEAK, true))
-                put("speech_rate", prefs.getFloat(KEY_RATE, 0.92f).toDouble())
+                put("speech_rate", prefs.getFloat(KEY_RATE, 1.0f).toDouble())
                 put("current_unit", prefs.getInt(KEY_UNIT, 0))
                 // 图标风格与明暗模式也要备份：设置页的备份说明写的是
                 // 「完整备份学习进度、成绩、成就与设置」，少了这两项就名不副实 ——
@@ -649,7 +649,7 @@ class BackupManager(
                 if (p.has(KEY_GOAL)) putInt(KEY_GOAL, p.optInt(KEY_GOAL, 20).coerceIn(5, 100))
                 if (p.has(KEY_AUTOSPEAK)) putBoolean(KEY_AUTOSPEAK, p.optBoolean(KEY_AUTOSPEAK, true))
                 if (p.has(KEY_RATE)) {
-                    putFloat(KEY_RATE, p.optDouble(KEY_RATE, 0.92).toFloat().coerceIn(0.5f, 1.4f))
+                    putFloat(KEY_RATE, p.optDouble(KEY_RATE, 1.0).toFloat().coerceIn(0.5f, 1.4f))
                 }
                 if (p.has(KEY_UNIT)) putInt(KEY_UNIT, p.optInt(KEY_UNIT, 0).coerceAtLeast(0))
                 /*

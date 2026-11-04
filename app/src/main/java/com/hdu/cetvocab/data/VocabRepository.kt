@@ -139,8 +139,19 @@ class VocabRepository(context: Context) {
         get() = prefs.getBoolean(KEY_SOUND, true)
         set(value) = prefs.edit().putBoolean(KEY_SOUND, value).apply()
 
+    /**
+     * 朗读语速。默认 1.0（标准语速）。
+     *
+     * 历史默认值是 0.92x，比标准语速慢一点，初衷是让生词听起来更清楚。
+     * 但用户反馈里更常见的抱怨是「读得太慢、等它念完才能进下一个词」——
+     * TTS 的 1.0 已经是各厂商引擎的默认语速，回落到这个值更符合直觉，
+     * 想听慢的可以在设置页自己往左拉。
+     *
+     * 注意这里只改**默认值**：`getFloat` 的第二个参数只在键不存在时生效，
+     * 所以已经手动调过语速的老用户不会被这次改动覆盖。
+     */
     var speechRate: Float
-        get() = prefs.getFloat(KEY_RATE, 0.92f)
+        get() = prefs.getFloat(KEY_RATE, 1.0f)
         set(value) = prefs.edit().putFloat(KEY_RATE, value).apply()
 
     /**

@@ -204,7 +204,7 @@ data class ProfileUiState(
     val weekStats: List<DayStat> = emptyList(),
     val goal: Int = 20,
     val autoSpeak: Boolean = true,
-    val speechRate: Float = 0.92f,
+    val speechRate: Float = 1.0f,
     val stage: Int = WordDb.STAGE_CET4,
     val iconStyle: Int = LauncherIcons.STYLE_DEFAULT,
     /**
