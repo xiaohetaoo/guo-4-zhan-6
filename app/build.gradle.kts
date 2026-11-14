@@ -8,8 +8,8 @@ plugins {
 /*
  * 签名凭据读取。
  *
- * 历史问题：storePassword / keyPassword 曾以明文写死在本文件里，而本文件是被版本库跟踪的，
- * 导致发布签名口令随公开仓库一起泄露（详见 _audit/代码审计报告.md 的 P0-1）。
+ * 早期版本曾把 storePassword / keyPassword 直接写在这个被版本库跟踪的文件里，
+ * 存在凭据外泄风险；相关口令已经轮换。
  *
  * 现在改为按「环境变量 → local.properties」的顺序读取，脚本里不再出现任何口令字面量。
  * local.properties 已被 .gitignore 排除，不会进入版本库；CI 环境用环境变量注入。

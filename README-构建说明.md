@@ -102,12 +102,12 @@ gradle assembleRelease
   `CETVOCAB_STORE_PASSWORD` / `CETVOCAB_KEY_ALIAS` / `CETVOCAB_KEY_PASSWORD`
 （优先级：环境变量→local.properties）。
 - **两处都取不到时release构建会直接失败**，这是刻意设计：宁可失败，也不退回把口令硬编码进
-  `build.gradle.kts`（历史上正发生过，见提交记录与`CHANGELOG.md`）。只想看功能的话跑debug即可：
+  `build.gradle.kts`。只想看功能的话跑debug即可：
   `gradle assembleDebug`，无需任何签名配置（debug包applicationId带`.debug`后缀，可与release并存）。
 - 要换自己的密钥：`keytool -genkeypair -V3 -keystore cetvocab-release.jks -storetype PKCS12 -alias <别名> -dname "CN=..." -validity 10000 -keyalg RSA -keysize 2048`。
 注意**换证书后老用户无法覆盖升级**（签名不同会被系统拒绝），只能卸载重装；本项目历史版本共用同一把证书。
-- 历史遗留：早期版本的`build.gradle.kts`里出现过明文口令，且仓库曾公开。签名口令已轮换（证书不变，
-覆盖升级仍可用），但公开仓库的历史提交里仍能看到旧字串——它已失效，仅作提示。
+- 早期版本使用过明文口令，相关口令已经轮换（证书不变，覆盖升级仍可用）；
+  当前构建流程里不再包含任何口令字面量。
 
 
 ---
