@@ -210,13 +210,13 @@ fun StudyScreen(
                     // 与底部按钮同名，也和结算页的两块统计同名。
                     text = "认识${state.knownCount}",
                     container = LocalAppColors.current.cardMint,
-                    contentColor = LocalAppColors.current.success
+                    contentColor = LocalAppColors.current.successText
                 )
                 Spacer(Modifier.width(6.dp))
                 Tag(
                     text = "待加强${state.unknownCount}",
                     container = LocalAppColors.current.cardPeach,
-                    contentColor = LocalAppColors.current.warning
+                    contentColor = LocalAppColors.current.warningText
                 )
             }
             Spacer(Modifier.height(10.dp))
@@ -353,7 +353,10 @@ fun StudyScreen(
                                 .weight(1f)
                                 .height(52.dp),
                             shape = RoundedCornerShape(18.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = LocalAppColors.current.success)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = LocalAppColors.current.successButton,
+                                contentColor = LocalAppColors.current.onSuccessButton
+                            )
                         ) {
                             Text(stringResource(R.string.study_known), fontWeight = FontWeight.SemiBold)
                         }
@@ -782,8 +785,8 @@ private fun StudySummary(
             Spacer(Modifier.height(20.dp))
             AppCard(padding = 18.dp) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SummaryTile("认识", known, LocalAppColors.current.success, LocalAppColors.current.cardMint, Modifier.weight(1f))
-                    SummaryTile("待加强", unknown, LocalAppColors.current.warning, LocalAppColors.current.cardAmber, Modifier.weight(1f))
+                    SummaryTile("认识", known, LocalAppColors.current.successText, LocalAppColors.current.cardMint, Modifier.weight(1f))
+                    SummaryTile("待加强", unknown, LocalAppColors.current.warningText, LocalAppColors.current.cardAmber, Modifier.weight(1f))
                 }
             }
             if (achievements.isNotEmpty()) {

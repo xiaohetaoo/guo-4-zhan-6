@@ -8,6 +8,88 @@
 
 ---
 
+## [v1.5.0] - 2026-11-15
+
+第七轮全量代码审查（34 个 Kotlin 文件 + res + manifest）后的修复版，**11 项落地、1 项确认为误报后回退**。
+审查报告与逐条取证见 `_audit/代码审查报告-v1.4.12.md`。
+
+版本号按既定规则进位：`1.4` 这一节已发满 12 个修订号，本轮进位到 **1.5.0**；
+`versionCode` 53 → 54。词库内容未变，`DB_VERSION` 仍为 8，老用户升级不重拷词库。
+
+### 修复（P1：功能失效）
+
+- **六级用户「一键标记高中词汇」此前只生效 4%**（2604 词里只标上 101 个）。
+  `highSchoolWordIds()` 用 `SELECT MIN(id) ... GROUP BY word` 跨级去重，
+  而四级 id 是 1..4750、六级是 4751..10998，`MIN(id)` 几乎总落在四级行；
+  `newWords()` 按当前级别的行取词，于是六级队列一个词都没让位 ——
+  而提示、已学词数、成就全都报「成功」，用户完全看不出功能没生效。
+  现在改为 `WHERE is_hs=1 AND stage=?`（阶段内 word 唯一，不需要 GROUP BY），
+  四级 2503 / 六级 2604，设置页副标题的计数同步按级别。
+  **真机验证**：六级标记后学习页首词从 `abandon` 变为 `abbreviation`。
+- **排行榜「待重做 N 题」与结算页数字对不上**：`refreshProfile` / `refreshLeaderboard`
+  直连 `UserDb.quizWrongCount`（原始 COUNT），而结算页走 `VocabRepository.quizWrongCount`
+  （剔除词库更新后的孤儿行）。两处统一改走后者。
+
+### 修复（P2）
+
+- **浅色主题语义色当文字色时对比度普遍不足**（视觉，系统性）。
+  按 WCAG 实算：「待加强」标签 1.97:1、「听音拼写」标签 2.05:1、
+  首页「连续打卡」数值 2.05:1、闯关正确项文字 2.87:1、「认识」按钮白字 3.39:1 ——
+  全部低于 4.5:1，而深色那一套全部达标（6.5–7.8），
+  与 v1.4.6 修过的成就金属色是同一个病根。
+  `AppColors` 新增 `successText` / `warningText` / `successButton` / `onSuccessButton`
+  四个**文字专用色槽**，全站 24 处文字用途替换；
+  装饰用途（进度条、圆点、色条、徽章底）保持原色，观感不变。
+  浅色 successText `#416D3C`、warningText `#936525`；
+  深色「认识」按钮改为亮绿底 + 深字（白字原本只有 2.18:1）。
+  逐处实际用法 17 项复核全部达标。
+- **生词本 / 错词本不按级别过滤**：同一个词在四级与六级各收藏一次，
+  列表里就出现两张一样的卡片，复习时还会重复出题。
+  `favWords()` 补 stage 过滤；`wrongWords()` 先按 stage 筛 id 再截取名额
+  （顺序反了会让名额被另一级别占掉）。
+- **「返回上一个词」的弹栈在并发标志之前**：同帧双击可让「认识」计数变负数。
+  改为先判空栈 → 置 `answering` → 再弹栈，计数器加下界兜底。
+- **语音缺失提示无去重**：没装英文语音包的设备上连点喇叭会连弹多条相同提示。
+  `Speech` 加一次性标记，`shutdown()` 时复位。
+- `markBatchLearned` 的 `IN` 查询改占位符（当前不可注入，属防御性一致化）。
+
+### 修复（P3：工程卫生）
+
+- 删除死代码 `prepareTutorialReplay()`（v1.4.7 审查已提出）。
+- `levelLabel()` 补「六档量表唯一权威定义，勿删」说明 + `@Suppress("unused")`。
+- 3 处 `mutableStateOf(0)` 改 `mutableIntStateOf`。
+- 删除 `MainActivity` 与 application 重复的 `android:label`。
+
+### 刻意没做的
+
+- **`mipmap-anydpi-v26` 不改名**。lint 的 `ObsoleteSdkInt` 提示把 `-v26` 判为冗余
+  （minSdk 已是 26），但实际改名后 **AAPT2 链接失败**：四个 `ic_launcher*` 全部
+  报 resource not found。自适应图标（`<adaptive-icon>`）必须带 `-v26` 限定符
+  才会被识别为 mipmap 资源 —— 这条 lint 提示在此场景下是误报，已回退并记入审查报告。
+
+### 验证
+
+- `gradle :app:assembleRelease :app:lintRelease --offline` → **BUILD SUCCESSFUL**，
+  lint **0 errors / 5 warnings**（上一版 6 warnings，减少的是本轮消除的 RedundantLabel；
+  3 条 AutoboxingStateCreation 提示也已清零）。
+- 真机（MuMu / Android 12 / 1080×2400 / 420dpi，release 包）：
+  六级标记后队列首词 `abandon` → `abbreviation`；
+  撤销后「认识1」→「认识0」、栈空按钮消失；
+  四级生词本只显示本级收藏词、无重复；
+  浅色 / 深色下「认识」按钮与闯关选项配色均清晰可读。
+- **未覆盖**（如实记录）：A2 的孤儿场景（当前词库 id 与上一版一致，造不出孤儿）、
+  B3 的同帧双点击竞态、B5 的缺语音包设备，三者均为代码级确证；
+  小屏 / 大字号 / 分屏 / RTL 未测。
+
+### 交付物
+
+| 文件 | 字节 | SHA-256 |
+| :--- | ---: | :--- |
+| `过四斩六-v1.5.0-离线版.apk` | 9,625,539 | `625d704a35c7ebee1538927d8fd6ada87a9bb31245c7e941a06523ae563d79aa` |
+| `过四斩六-源码与构建脚本.zip` | 3,557,506 | `fcc971cfaa5f12884868ef29b6ee2a9b552076865159cb8ef2597a6e0293b912` |
+
+---
+
 ## [v1.4.12] - 2026-11-04
 
 全库文本审查后的修正：**3210 行**内容被改正，词条数量、id、unit、rank 一个都没动

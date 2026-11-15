@@ -989,17 +989,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 从设置页主动重看教程。
-     *
-     * 调用方负责导航：教程画在学习页上，所以必须先把一局学习装好再跳过去。
-     * 这里只负责把「已看过」这个标记复位，让下一次 [startTodayStudy]
-     * 或 [startTutorialReplay] 重新摆出教程。
-     */
-    fun prepareTutorialReplay() {
-        viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = false }
-    }
-
-    /**
      * 设置页「重新查看新手教程」的落地动作：装一局今日学习并**强制**带教程。
      *
      * 不复用 [startTodayStudy] 的原因：那条路按 `tutorialSeen` 判断，
@@ -1149,8 +1138,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun stepBack() {
         if (answering) return
-        val entry = undoStack.removeLastOrNull() ?: return
+        /*
+         * 弹栈必须在 answering 置位**之后**。
+         *
+         * 早期写法是「先 removeLastOrNull()、再 answering = true」，
+         * 而 answering 是普通 Boolean、这两步之间没有原子性：
+         * 同帧到达的两次点击都能通过上面的 if，各自弹走一条记录，
+         * 然后两个协程各把 knownCount 减 1 —— 栈里只有一条有效记录时
+         * 计数器就会变成负数，顶栏显示「认识-1」，
+         * 结算页的 total = known + unknown 与百分比也跟着错。
+         *
+         * 现在的顺序与 [answerCurrent] 一致：先占标志、再动栈。
+         * 空栈判断放在占位之前，避免「点了没反应还把 answering 卡住」。
+         */
+        if (undoStack.isEmpty()) return
         answering = true
+        val entry = undoStack.removeLast()
         viewModelScope.launch {
             try {
                 val undone = withContext(Dispatchers.IO) { repo.undoAnswer(entry.prev) }
@@ -1164,8 +1167,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     s.copy(
                         index = entry.index,
                         flipped = false,
-                        knownCount = s.knownCount - if (entry.known) 1 else 0,
-                        unknownCount = s.unknownCount - if (entry.known) 0 else 1,
+                        // 下界兜底：即使将来别处又引入了重复撤销，
+                        // 也不会让顶栏出现「认识-1」这种明显错误的显示
+                        knownCount = (s.knownCount - if (entry.known) 1 else 0).coerceAtLeast(0),
+                        unknownCount = (s.unknownCount - if (entry.known) 0 else 1).coerceAtLeast(0),
                         currentLevel = entry.prev.level,
                         finished = false
                     )
@@ -2247,7 +2252,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     animationsEnabled = repo.animationsEnabled,
                     soundEnabled = repo.soundEnabled,
                     leaderboard = repo.userDb.quizRecords(50),
-                    wrongRedoCount = repo.userDb.quizWrongCount(repo.stage),
+                    // 必须走 Repository 的过滤版本：UserDb 那个是原始 COUNT(*)，
+                    // 不剔除词库更新后遗留的孤儿错题，会与结算页的数字对不上
+                    // （详见 VocabRepository.quizWrongCount 的说明）。
+                    wrongRedoCount = repo.quizWrongCount(repo.stage),
                     aggregate = repo.userDb.quizAggregate()
                 )
             }
@@ -2296,7 +2304,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 Triple(
                     repo.userDb.quizRecords(50),
                     repo.userDb.quizAggregate(),
-                    repo.userDb.quizWrongCount(repo.stage)
+                    // 与 refreshProfile / finishQuiz 同口径：走 Repository 的孤儿过滤版本
+                    repo.quizWrongCount(repo.stage)
                 )
             }
             _profile.update {

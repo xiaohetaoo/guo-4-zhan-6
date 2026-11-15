@@ -391,7 +391,7 @@ fun AchievementDetailDialog(def: AchievementDef, unlockedTs: Long?, onDismiss: (
                         }.getOrDefault("已解锁")
                     } ?: "尚未解锁，达成后会自动记录在这里",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (unlocked) LocalAppColors.current.success
+                    color = if (unlocked) LocalAppColors.current.successText
                     else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

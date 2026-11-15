@@ -86,6 +86,18 @@ class Speech(
      */
     var onUnavailable: ((String) -> Unit)? = null
 
+    /**
+     * 「英文语音数据缺失」这句话是否已经说过。
+     *
+     * [speakAuto] 在缺失时静默跳过（注释写明「避免每翻一张卡弹一次提示」），
+     * 但手动 [speak] 此前没有去重 —— 用户在没装英文语音包的 ROM 上
+     * 连点十次喇叭就会连弹十条一模一样的 Snackbar。
+     * 与 AppViewModel 的 wordbookReported / userDataReported 同一套规矩：
+     * 同一个原因只说一次。[shutdown] 时复位（换引擎后应重新提示）。
+     */
+    @Volatile
+    private var voiceMissingReported = false
+
     /** 手动发音：用户主动点击喇叭，不受「自动朗读」开关影响 */
     fun speak(text: String) {
         if (text.isBlank()) return
@@ -101,7 +113,8 @@ class Speech(
             tts.setSpeechRate(rateProvider())
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "cet_" + text.hashCode())
         }
-        if (englishVoiceMissing) {
+        if (englishVoiceMissing && !voiceMissingReported) {
+            voiceMissingReported = true
             onUnavailable?.invoke("系统未安装英文语音数据，发音可能不准；可在系统设置的语音输入里安装")
         }
     }
@@ -123,5 +136,7 @@ class Speech(
         ready = false
         configured = false
         englishVoiceMissing = false
+        // 换引擎后应重新提示一次，见 voiceMissingReported
+        voiceMissingReported = false
     }
 }

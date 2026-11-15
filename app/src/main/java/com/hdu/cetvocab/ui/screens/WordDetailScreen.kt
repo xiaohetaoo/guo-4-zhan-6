@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -84,7 +85,7 @@ fun WordDetailScreen(
      */
     var fav by remember(wordId) { mutableStateOf(false) }
     var favLoaded by remember(wordId) { mutableStateOf(false) }
-    var level by remember(wordId) { mutableStateOf(0) }
+    var level by remember(wordId) { mutableIntStateOf(0) }
 
     LaunchedEffect(wordId) {
         // 只把**读库**放到 IO 线程，赋值必须回到主线程。

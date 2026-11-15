@@ -18,6 +18,41 @@ data class AppColors(
     val star: Color,
     val fire: Color,
     val gold: Color,
+    /**
+     * 「成功 / 答对」的**文字专用色**（见 [warningText] 的说明）。
+     *
+     * [success] 同时承担两种角色：装饰（进度条、圆点、色条、徽章底）与文字
+     * （标签文字、数值、选项文字）。装饰只需与底色可辨（3:1），
+     * 文字要按正文标准 4.5:1 —— 同一个色值不可能同时满足两边的观感要求。
+     *
+     * 浅色原值 #5B9A54 当文字用时实测：
+     *   cardMint 3.00、surface 3.39、绿16%混底 2.87 —— 全部不达标。
+     * 压暗到 #416D3C 后：5.35 / 6.04 / 5.12，全部过线。
+     */
+    val successText: Color,
+    /**
+     * 「提醒 / 待加强」的**文字专用色**。
+     *
+     * 与 [successText] 同一套设计。浅色原值 #E9A03B 当文字用时实测：
+     *   cardPeach 1.97、cardAmber 2.05 —— 连大字号的 3:1 都不到，
+     * 是全站对比度最差的一处（「待加强」标签、首页「连续打卡」数值、
+     * 排行榜「历史最高分」数值都用它）。
+     * 压暗到 #936525 后：4.57 / 4.74，过线。
+     *
+     * 深色那套语义色本身在深底上已经达标（6.5–7.8），
+     * 因此深色的 text 槽直接复用原值，不做额外压暗。
+     */
+    val warningText: Color,
+    /**
+     * 「认识」按钮的**底色**。
+     *
+     * 按钮上是白字，白压 #5B9A54 只有 3.39:1、压深色 #7FBF78 只有 2.18:1。
+     * 浅色把底压暗到 #4D8347（白字 4.51:1）；
+     * 深色保持亮绿底、改用深色字（见 [onSuccessButton]）。
+     */
+    val successButton: Color,
+    /** 「认识」按钮上的文字色，与 [successButton] 配对 */
+    val onSuccessButton: Color,
     // 卡片柔和底色
     val cardPeach: Color,
     val cardAmber: Color,
@@ -59,6 +94,11 @@ val LightAppColors = AppColors(
     star = ColorStar,
     fire = ColorFire,
     gold = ColorGold,
+    // 文字专用色：见字段注释里的实测对比度
+    successText = Color(0xFF416D3C),
+    warningText = Color(0xFF936525),
+    successButton = Color(0xFF4D8347),
+    onSuccessButton = Color(0xFFFFFFFF),
     cardPeach = CardPeach,
     cardAmber = CardAmber,
     cardRose = CardRose,
@@ -99,6 +139,12 @@ val DarkAppColors = AppColors(
     star = DarkStar,
     fire = DarkFire,
     gold = DarkGold,
+    // 深色语义色在深底上本就达标（success 6.52、warning 7.81），文字直接复用
+    successText = DarkSuccess,
+    warningText = DarkWarning,
+    // 深色底是亮绿，白字只有 2.18:1 —— 保持亮绿底、改用深色字（8.08:1）
+    successButton = DarkSuccess,
+    onSuccessButton = Color(0xFF14210F),
     cardPeach = DarkCardPeach,
     cardAmber = DarkCardAmber,
     cardRose = DarkCardRose,

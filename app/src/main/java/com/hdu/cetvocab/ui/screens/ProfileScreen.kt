@@ -185,7 +185,7 @@ fun ProfileScreen(
                             Tag(
                                 text = "熟悉以上${ov.mastered}词",
                                 container = LocalAppColors.current.cardMint,
-                                contentColor = LocalAppColors.current.success
+                                contentColor = LocalAppColors.current.successText
                             )
                         }
                     }

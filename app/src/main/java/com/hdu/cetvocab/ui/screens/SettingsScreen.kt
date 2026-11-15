@@ -519,7 +519,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onReplayTutorial: () ->
                             else -> "当前桌面显示：默认书本图标"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (pending) LocalAppColors.current.warning
+                        color = if (pending) LocalAppColors.current.warningText
                         else MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold
                     )

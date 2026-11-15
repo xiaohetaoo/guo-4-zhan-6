@@ -393,7 +393,7 @@ private fun QuizPicker(
             val cellInteraction = remember { MutableInteractionSource() }
             val accent = when {
                 !usable -> MaterialTheme.colorScheme.onSurfaceVariant
-                item.done -> LocalAppColors.current.success
+                item.done -> LocalAppColors.current.successText
                 else -> MaterialTheme.colorScheme.primary
             }
             Column(
@@ -506,7 +506,7 @@ private fun QuizPlay(
                     Tag(
                         text = "连击${state.combo}",
                         container = LocalAppColors.current.cardAmber,
-                        contentColor = LocalAppColors.current.warning
+                        contentColor = LocalAppColors.current.warningText
                     )
                     Spacer(Modifier.width(6.dp))
                 }
@@ -897,7 +897,7 @@ private fun OptionRow(
     )
     val content by animateColorAsState(
         targetValue = when {
-            revealed && isAnswer -> LocalAppColors.current.success
+            revealed && isAnswer -> LocalAppColors.current.successText
             revealed && selected -> LocalAppColors.current.danger
             selected -> MaterialTheme.colorScheme.onPrimaryContainer
             else -> MaterialTheme.colorScheme.onSurface
@@ -1048,7 +1048,7 @@ private fun TranslationQuestion(
             Tag(
                 text = "真题句子翻译",
                 container = LocalAppColors.current.cardMint,
-                contentColor = LocalAppColors.current.success
+                contentColor = LocalAppColors.current.successText
             )
             Spacer(Modifier.width(8.dp))
             Tag(
@@ -1114,7 +1114,7 @@ private fun MultiOptionRow(
     )
     val content by animateColorAsState(
         targetValue = when {
-            revealed && isAnswer -> LocalAppColors.current.success
+            revealed && isAnswer -> LocalAppColors.current.successText
             revealed && checked -> LocalAppColors.current.danger
             checked -> MaterialTheme.colorScheme.onPrimaryContainer
             else -> MaterialTheme.colorScheme.onSurface
@@ -1206,7 +1206,7 @@ private fun MultiOptionRow(
             Text(
                 text = "漏选",
                 style = MaterialTheme.typography.labelSmall,
-                color = LocalAppColors.current.success
+                color = LocalAppColors.current.successText
             )
         }
         if (revealed && checked && !isAnswer) {
@@ -1227,7 +1227,7 @@ private fun SpellingQuestion(
 ) {
     AppCard(modifier = Modifier.fillMaxWidth(), padding = 22.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Tag(text = "听音拼写", container = LocalAppColors.current.cardAmber, contentColor = LocalAppColors.current.warning)
+            Tag(text = "听音拼写", container = LocalAppColors.current.cardAmber, contentColor = LocalAppColors.current.warningText)
             Spacer(Modifier.weight(1f))
             SpeakButton(text = q.word.word, onSpeak = onSpeak, size = 44.dp)
         }
@@ -1379,7 +1379,7 @@ private fun QuizResult(
                     Tag(
                         text = "正确率${accuracy}%",
                         container = if (accuracy >= 80) LocalAppColors.current.cardMint else LocalAppColors.current.cardPeach,
-                        contentColor = if (accuracy >= 80) LocalAppColors.current.success else LocalAppColors.current.warning
+                        contentColor = if (accuracy >= 80) LocalAppColors.current.successText else LocalAppColors.current.warningText
                     )
                 }
             }

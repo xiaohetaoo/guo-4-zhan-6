@@ -197,7 +197,16 @@ class VocabRepository(context: Context) {
 
     // ---------------- 熟练度等级 ----------------
 
-    /** 等级含义：0 未学 1 初识 2 认识 3 熟悉 4 掌握 5 精通 */
+    /**
+     * 等级含义：0 未学 1 初识 2 认识 3 熟悉 4 掌握 5 精通。
+     *
+     * **这是六档量表的唯一权威定义，勿删。** 目前没有任何界面直接调用它
+     * （界面用 LevelDots 圆点 + `cd_level_dots` 无障碍描述），
+     * 但「熟悉以上 = level >= 3」「精通 = 5」这些口径的文字锚点就在这里：
+     * [MASTER_LEVEL]、[LEVEL_EXPERT]、成就文案、首页与「我的」页的统计位
+     * 全部按这套命名对齐。删掉它，下一轮改文案时就失去了对照基准。
+     */
+    @Suppress("unused")
     fun levelLabel(level: Int): String = when (level) {
         0 -> "未学"
         // 1 档原为「模糊」：按钮说「认识」，等级却显示「模糊」，读起来是反的。
@@ -289,18 +298,23 @@ class VocabRepository(context: Context) {
     }
 
     /**
-     * 一键把高中课标词标为已学会，返回实际改动的词数。
+     * 一键把**当前级别**的高中标词标为已学会，返回实际改动的词数。
      *
+     * 必须按 [stage] 取 id：跨级去重会让六级用户只标上 101/2604 个
+     * （详见 [WordDb.highSchoolWordIds] 的说明）。
      * 2604 个词在一个事务里写完（[UserDb.markBatchLearned]），调用方在 IO 线程跑。
      */
     fun markHighSchoolLearned(): Int {
-        val ids = wordDb.highSchoolWordIds()
+        val ids = wordDb.highSchoolWordIds(stage)
         if (ids.isEmpty()) return 0
         return userDb.markBatchLearned(ids)
     }
 
-    /** 高中课标词总数（设置页在按钮副标题里如实写出「将标记 N 个」） */
-    fun highSchoolWordCount(): Int = wordDb.highSchoolWordCount()
+    /**
+     * 当前级别的高中标词总数（设置页在按钮副标题里如实写出「共有 N 个」）。
+     * 与 [markHighSchoolLearned] 同口径，四级 2503 / 六级 2604。
+     */
+    fun highSchoolWordCount(): Int = wordDb.highSchoolWordCount(stage)
 
     /**
      * 切换收藏并返回新值。
@@ -377,9 +391,20 @@ class VocabRepository(context: Context) {
 
     fun unitWords(unit: Int): List<Word> = wordDb.wordsOfUnit(stage, unit)
 
+    /**
+     * 当前级别的生词本。
+     *
+     * **必须按级别过滤**，与 [dueWords] 同一口径：学习记录按 word_id 全局存放，
+     * 而同一个单词在四级段与六级段各有一行、两个 id。不过滤的话，
+     * 用户在四级收藏 abandon、又在六级收藏一次，生词本里就会出现
+     * **两张一模一样的卡片**，「开始复习生词」还会把同一个词排进队列两次。
+     * 分段标题的计数直接取 size，过滤后计数自动跟着正确。
+     */
     fun favWords(): List<Word> {
         val ids = userDb.states().values.filter { it.fav }.map { it.wordId }
-        return wordDb.wordsByIds(ids).sortedBy { it.word }
+        return wordDb.wordsByIds(ids)
+            .filter { it.stage == stage }
+            .sortedBy { it.word }
     }
 
     /**
@@ -390,14 +415,19 @@ class VocabRepository(context: Context) {
      * 返回顺序是数据库给的顺序，于是上面那句 `sortedByDescending { wrongCount }`
      * 会被它直接抹掉 —— 早期实现就是这样：错 5 次的词和错 1 次的词混在一起按 id 排，
      * 「最该补的词在最前面」这个承诺从来没成立过。
+     *
+     * 级别过滤同 [favWords]：不过滤会让同一个词的两级记录都进列表，
+     * 既重复显示，又白白占掉 [WRONG_STUDY_LIMIT] 的名额。
+     * 注意过滤要放在 take(limit) **之前**，否则名额会先被别的级别占掉。
      */
     fun wrongWords(limit: Int = 60): List<Word> {
-        val ids = userDb.states().values
+        val candidates = userDb.states().values
             // 已答到「精通」档（LEVEL_EXPERT）的词不再占用错词本，避免只增不减
             .filter { it.wrongCount > 0 && it.level < LEVEL_EXPERT }
             .sortedWith(compareByDescending<WordState> { it.wrongCount }.thenBy { it.wordId })
-            .map { it.wordId }
-            .take(limit)
+        // 先按当前级别筛出 id，再截取前 N 个 —— 顺序反了会让名额被另一级别占掉
+        val stageIds = wordDb.idsOfStage(stage).toHashSet()
+        val ids = candidates.map { it.wordId }.filter { it in stageIds }.take(limit)
         val byId = wordDb.wordsByIds(ids).associateBy { it.id }
         return ids.mapNotNull { byId[it] }
     }

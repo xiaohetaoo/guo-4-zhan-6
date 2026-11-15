@@ -290,13 +290,24 @@ class WordDb(private val context: Context) {
         queryWords("id=?", arrayOf(id.toString()), null).firstOrNull()
 
     /**
-     * 全部「高中课标」不同单词的 id（口径见 [Word.isHighSchool]）。
+     * **指定级别**下全部「高中课标」词的 id（口径见 [Word.isHighSchool]）。
      *
-     * 同一个单词在四级段与六级段各占一行（六级是四级的超集），
-     * 所以这里按单词去重、每词只取一个 id（取 id 最小的那一行，
-     * 与 [canonicalMap] 的「同一单词用最小 id 作代表」口径一致）。
-     * 不去重的话会返回 5107 个 id，其中 2503 对指向同一个词 ——
-     * 批量标记会白写一遍，返回值也会虚报成五千多。
+     * ## 为什么必须带 stage，不能跨级去重
+     * 早期实现写的是 `SELECT MIN(id) ... GROUP BY word`，想「每个单词只标一次」。
+     * 但四级 id 是 1..4750、六级是 4751..10998，同一个词在两级各占一行，
+     * `MIN(id)` 因此**几乎总是落在四级那一行**：2604 个代表 id 里
+     * 2503 个是四级、只有 101 个是六级。
+     *
+     * 而 [VocabRepository.newWords] 是按 `wordsOfStage(stage)` 取当前级别的行、
+     * 再用 `states[it.id]` 判是否学过 —— 六级用户点完「一键标记」，
+     * 写进去的 2503 个四级 id 对六级队列**毫无影响**，
+     * 队列一个词都没让位，而提示、已学词数、成就全都报「成功」。
+     * 实测六级用户只有 101/2604 生效。
+     *
+     * 现在按级别取：每个阶段内部 word 唯一（四级 4750 行 / 4750 词，
+     * 六级 6248 行 / 6248 词），因此**不需要 GROUP BY**，
+     * 直接 `WHERE is_hs=1 AND stage=?` 就是「本级全部高中词」，
+     * 四级 2503 个、六级 2604 个，与 [highSchoolWordCount] 同口径。
      *
      * 为什么不走 [queryWords] 再 map 出 id：那条路径要把整行 16 列
      * 全部取出来拼成 [Word] 对象，调用方却只用得到 id。
@@ -306,11 +317,12 @@ class WordDb(private val context: Context) {
      * 但万一重拷失败（磁盘满、目标文件被占用），空列表能让设置页如实说
      * 「一个都没标上」，比让整页崩溃强。
      */
-    fun highSchoolWordIds(): List<Int> =
+    fun highSchoolWordIds(stage: Int): List<Int> =
         reading(emptyList()) { d ->
             runCatching {
                 d.rawQuery(
-                    "SELECT MIN(id) FROM words WHERE is_hs=1 GROUP BY word", null
+                    "SELECT id FROM words WHERE is_hs=1 AND stage=?",
+                    arrayOf(stage.toString())
                 ).use { c ->
                     val list = ArrayList<Int>(2700)
                     while (c.moveToNext()) list.add(c.getInt(0))
@@ -320,19 +332,22 @@ class WordDb(private val context: Context) {
         }
 
     /**
-     * 高中课标词的数量 —— **按不同单词计**，不是按词库行数计。
+     * **指定级别**下高中课标词的数量，与 [highSchoolWordIds] 严格同口径。
      *
-     * 这两个数不一样，别混用：words 表里同一个单词在四级段与六级段各有一行
-     * （六级是四级的超集），高中词因此占 5107 行、却只有 2604 个不同单词。
-     * 界面上说「共有 N 个词」时用户读的是「多少个单词」，所以这里按
-     * `word` 去重计数。行数口径会让设置页写出「共有 5107 个词」——
-     * 比真实多出近一倍，用户点完发现「已学会」只涨了两千多，会以为功能出了错。
+     * 必须带 stage：设置页那句「本词库里共有 N 个词属于高中范围」讲的是
+     * **用户当前级别**能被标记多少个。不带 stage 的 `COUNT(DISTINCT word)`
+     * 恒为 2604，四级用户会看到「共有 2604 个」而实际只标得上 2503 个。
+     *
+     * 阶段内 word 唯一，所以 `COUNT(*)` 与 `COUNT(DISTINCT word)` 等价；
+     * 这里仍写 DISTINCT 是为了把「按单词计」这个口径写在脸上，
+     * 免得将来词表改成允许同阶段重复时悄悄变成行数。
      */
-    fun highSchoolWordCount(): Int =
+    fun highSchoolWordCount(stage: Int): Int =
         reading(0) { d ->
             runCatching {
                 d.rawQuery(
-                    "SELECT COUNT(DISTINCT word) FROM words WHERE is_hs=1", null
+                    "SELECT COUNT(DISTINCT word) FROM words WHERE is_hs=1 AND stage=?",
+                    arrayOf(stage.toString())
                 ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
             }.getOrDefault(0)
         }

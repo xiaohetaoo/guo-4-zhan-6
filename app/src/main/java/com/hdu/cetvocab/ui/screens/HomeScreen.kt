@@ -272,7 +272,7 @@ fun HomeScreen(
                                 else -> "暂无待学"
                             },
                             container = LocalAppColors.current.cardMint,
-                            contentColor = LocalAppColors.current.success
+                            contentColor = LocalAppColors.current.successText
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -328,7 +328,7 @@ fun HomeScreen(
                     unit = "词",
                     modifier = Modifier.weight(1f),
                     container = LocalAppColors.current.cardMint,
-                    tint = LocalAppColors.current.success
+                    tint = LocalAppColors.current.successText
                 )
             }
         }
@@ -340,7 +340,7 @@ fun HomeScreen(
                     unit = "天",
                     modifier = Modifier.weight(1f),
                     container = LocalAppColors.current.cardAmber,
-                    tint = LocalAppColors.current.warning
+                    tint = LocalAppColors.current.warningText
                 )
                 StatTile(
                     label = "目前进度",

@@ -352,13 +352,16 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         var changed = 0
         db.beginTransaction()
         try {
-            // 先查已有状态，只对 level < 3 的下手；分批查避免 IN 变量数超 999
+            // 先查已有状态，只对 level < 3 的下手；分批查避免 IN 变量数超 999。
+            // 占位符而不是拼接字面量：id 目前恒来自 WordDb 的 getInt（不可能注入），
+            // 但本文件其余查询一律走占位符，这里保持一致，
+            // 免得将来 id 来源改成外部输入（如备份 JSON）时变成真漏洞。
             val existing = HashMap<Int, WordState>(wordIds.size)
             wordIds.chunked(500).forEach { chunk ->
                 db.rawQuery(
                     "SELECT $STATE_COLUMNS FROM word_state WHERE word_id IN (" +
-                        chunk.joinToString(",") + ")",
-                    null
+                        chunk.joinToString(",") { "?" } + ")",
+                    chunk.map { it.toString() }.toTypedArray()
                 ).use { c -> while (c.moveToNext()) c.toWordState().let { existing[it.wordId] = it } }
             }
             wordIds.chunked(500).forEach { chunk ->

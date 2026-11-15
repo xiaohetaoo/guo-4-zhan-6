@@ -96,8 +96,8 @@ android {
         //   中文笔误「挡案库」→「档案库」、「狡猾的的」→「狡猾的」、「录相」→「录像」；
         //   4 处例句乱码（U+FFFD 把撇号吃了）→ 还原成 '。
         //   词库内容变了，DB_VERSION 7 → 8，老用户升级后自动重拷词库。
-        versionCode = 53
-        versionName = "1.4.12"
+        versionCode = 54
+        versionName = "1.5.0"
         vectorDrawables { useSupportLibrary = true }
     }
 

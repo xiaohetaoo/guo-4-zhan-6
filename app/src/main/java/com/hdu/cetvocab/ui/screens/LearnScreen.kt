@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -83,7 +84,7 @@ fun LearnScreen(
     val state by vm.learn.collectAsState()
     // 用 rememberSaveable：切到后台被系统回收后重建时，用户仍停在原来那个分段
     // 和「全部单词」浏览态，而不是被悄悄弹回单元列表。
-    var tab by rememberSaveable { mutableStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     var showingAllWords by rememberSaveable { mutableStateOf(false) }
 
     /*
@@ -107,7 +108,7 @@ fun LearnScreen(
      * 「冷启动那一刻的默认级别」记成用户的选择，六级用户每次进词库页
      * 都会被上面那段逻辑抹掉刚恢复出来的浏览态。
      */
-    var lastStage by rememberSaveable { mutableStateOf(-1) }
+    var lastStage by rememberSaveable { mutableIntStateOf(-1) }
     LaunchedEffect(state.stage, state.loading) {
         if (state.loading) return@LaunchedEffect
         if (lastStage < 0) {
@@ -469,7 +470,7 @@ private fun UnitList(
                             text = "${u.unit}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (u.done) LocalAppColors.current.success else MaterialTheme.colorScheme.primary
+                            color = if (u.done) LocalAppColors.current.successText else MaterialTheme.colorScheme.primary
                         )
                     }
                     Spacer(Modifier.width(12.dp))
@@ -485,7 +486,7 @@ private fun UnitList(
                                 Tag(
                                     text = "已学完",
                                     container = LocalAppColors.current.success.copy(alpha = 0.16f),
-                                    contentColor = LocalAppColors.current.success
+                                    contentColor = LocalAppColors.current.successText
                                 )
                             }
                         }

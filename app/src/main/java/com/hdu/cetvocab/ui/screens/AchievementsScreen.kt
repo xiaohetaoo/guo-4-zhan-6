@@ -88,7 +88,7 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                                     text = "$unlockedCount / $total",
                                     style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = LocalAppColors.current.success
+                                    color = LocalAppColors.current.successText
                                 )
                                 Spacer(Modifier.height(8.dp))
                                 Box(

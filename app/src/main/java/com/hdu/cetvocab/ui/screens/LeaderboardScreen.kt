@@ -108,7 +108,7 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit, onStartRedo: () -> U
                         value = "$best",
                         modifier = Modifier.weight(1f),
                         container = LocalAppColors.current.cardAmber,
-                        tint = LocalAppColors.current.warning
+                        tint = LocalAppColors.current.warningText
                     )
                     StatTile(
                         label = "平均分",
@@ -123,7 +123,7 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit, onStartRedo: () -> U
                         unit = "%",
                         modifier = Modifier.weight(1f),
                         container = LocalAppColors.current.cardMint,
-                        tint = LocalAppColors.current.success
+                        tint = LocalAppColors.current.successText
                     )
                 }
             }
