@@ -422,14 +422,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val data = withContext(Dispatchers.IO) {
                 // 级别只读一次：中途被改会导致「按四级取 id、按六级算总数」这类口径不一致
                 val stage = repo.stage
-                val overview = repo.overview()
+                /*
+                 * word_state 全表只读一次，其余统计全部透传：
+                 * overview / dueCount / todayQueue / 本级已学数各自都要 states()，
+                 * 各自为政时一次 refreshHome 要把这张表扫 4~5 遍。行数少时每遍
+                 * 只有几毫秒，但本方法挂在冷启动、切级别、答完一题、返回前台
+                 * 四条链路上，是固定的重复开销。repo 侧的带预载版本签名见
+                 * VocabRepository.dueWords / dueCount / todayQueue。
+                 */
+                val states = repo.userDb.states()
+                val overview = repo.overview(preloadedStates = states)
                 // 待复习要取真实总数，不能用 dueWords(40).size：后者末尾是 take(40)，
                 // 到期词积压到上百个时首页会一直显示「待复习 40 词」，看不出欠了多少
-                val due = repo.dueCount()
-                val queue = repo.todayQueue()
+                val due = repo.dueCount(states)
+                val queue = repo.todayQueue(states)
                 // 「目前进度」只算当前级别：全局已学数会把另一个级别也算进来，不能直接用
                 val stageIds = repo.wordDb.idsOfStage(stage).toHashSet()
-                val learnedInStage = repo.userDb.states()
+                val learnedInStage = states
                     .count { (id, st) -> st.level > 0 && id in stageIds }
                 HomeUiState(
                     loading = false,
@@ -503,6 +512,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 失败发生在应用已经退到后台之后，此刻弹 Snackbar 用户看不见，
      * 等下一次回到前台再补这一句（[onAppForeground]）。
      */
+    // @Volatile：写发生在 MainActivity.onStop 的 appScope（IO）协程，
+    // 读发生在 onAppForeground（主线程）—— 跨线程可见性必须由 volatile 保证，
+    // 否则主线程可能长期读到 null，失败提示永远补播不出来。
+    @Volatile
     private var pendingIconNotice: String? = null
 
     /** 写入被系统拒绝（入口存在，但这次没写进去）。 */
@@ -599,6 +612,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     .onSuccess {
                         // 一并清掉进行中的学习 / 闯关状态与并发标志，
                         // 否则清空数据后仍可能停在上一次的答题或结算页上。
+                        //
+                        // repo.resetAll() 的 prefs.clear() 会把 quiz_session /
+                        // quiz_interrupted 两个快照键一起清掉（同一个 prefs 文件），
+                        // 但**内存里的会话态**不归它管，必须在这里收：
+                        // · answerWrites 先 join 再清：在飞的逐题写入若不等待，
+                        //   会在清空事务提交后把旧错题写回空库；
+                        // · quizSpec / quizSession 推进：旧局的结算协程若还挂在路上，
+                        //   会话号比对（finishQuiz 的 session != quizSession）能让它作废；
+                        // · 推进 quizSnapshotEpoch：用户停在闯关选关页时清空数据，
+                        //   active/finished 两个键都没变，「有一局没打完」的卡片不会重算，
+                        //   快照虽然已被 prefs.clear() 清空，卡片却还指着旧局 —— 点「继续」
+                        //   会照旧开出一局旧题。epoch 一动，卡片立刻按空快照消失。
+                        answerWrites.toList().joinAll()
+                        answerWrites.clear()
                         answering = false
                         finishing = false
                         questionStartTs = 0L
@@ -607,8 +634,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         studyScreenActive = false
                         quizScreenActive = false
                         quizSnapshotCleared = false
+                        quizSpec = null
+                        quizSession++
                         _study.value = StudyUiState()
                         _quiz.value = QuizUiState()
+                        _quizSnapshotEpoch.update { it + 1 }
                         // 清空数据后撤销栈也必须作废：里面的快照指向已经不存在的状态，
                         // 万一用户此刻正停在某个会话里按了「返回」，会把旧数据写回来。
                         undoStack.clear()
@@ -708,17 +738,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val stage = repo.stage
                 val states = repo.userDb.states()
                 val allWords = repo.wordDb.wordsOfStage(stage)
-                val unitCount = repo.wordDb.unitCount(stage)
-                val units = (1..unitCount).map { u ->
-                    val words = repo.wordDb.wordsOfUnit(stage, u)
-                    UnitItem(
-                        unit = u,
-                        learned = words.count { (states[it.id]?.level ?: 0) > 0 },
-                        total = words.size,
-                        fromWord = words.firstOrNull()?.word ?: "",
-                        toWord = words.lastOrNull()?.word ?: ""
-                    )
-                }
+                /*
+                 * 单元进度直接从已取回的 allWords 内存分组，不再逐单元查库。
+                 *
+                 * 此前这里按 unitCount（四级 95 / 六级 125）循环调 wordsOfUnit(stage, u)，
+                 * 一次 refreshLearn 要发 95~126 条 rawQuery，再各配一次全表 wordsOfStage
+                 * 与 countOfStage —— 而本方法挂在全应用触发最频繁的刷新链路上
+                 * （冷启动、切级别、收藏/取消收藏、学习结束、闯关退出都会调它）。
+                 * allWords 本来就是按 rank 序取回的本级全量词表（每个词都带 unit 列），
+                 * groupBy(unit) 后按单元号排序即得与逐单元查询完全相同的结果，
+                 * 125 次查询收敛成 0 次。
+                 */
+                val units = allWords
+                    .groupBy { it.unit }
+                    .toSortedMap()
+                    .map { (u, words) ->
+                        UnitItem(
+                            unit = u,
+                            learned = words.count { (states[it.id]?.level ?: 0) > 0 },
+                            total = words.size,
+                            fromWord = words.firstOrNull()?.word ?: "",
+                            toWord = words.lastOrNull()?.word ?: ""
+                        )
+                    }
                 // 首字母分组（闯关页按 A–Z 选关），复用已加载的全量词表，避免重复查询
                 val letters = allWords
                     .filter { it.word.isNotEmpty() }
@@ -741,11 +783,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     stage = stage,
                     units = units,
                     letters = letters,
-                    totalWords = repo.wordDb.countOfStage(stage),
+                    // 全量词表已在手，直接取 size，不再单独发一次 COUNT 查询
+                    totalWords = allWords.size,
                     learnedWords = allWords.count { (states[it.id]?.level ?: 0) > 0 },
                     levels = levels,
-                    favWords = repo.favWords(),
-                    wrongWords = repo.wrongWords(WRONG_STUDY_LIMIT)
+                    // 透传同一份 states：favWords / wrongWords 内部不再各自全表扫描
+                    favWords = repo.favWords(states),
+                    wrongWords = repo.wrongWords(WRONG_STUDY_LIMIT, states)
                 )
             }
             // 用 copy 合并，而不是 `_learn.value = data` 整体替换：
@@ -960,17 +1004,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 教程「下一步」。已到最后一步时结束教程。 */
     fun tutorialNext() {
+        /*
+         * 写盘动作（launch）必须放在 update **之外**。
+         *
+         * MutableStateFlow.update 的 lambda 在 CAS 竞争下会被重试执行，
+         * 把 launch 塞进去等于让「启动协程」这个副作用跟着重跑 ——
+         * 同一条纪律在 applyAnswer 的注释里已经写过一遍（那边连 sfx 都移出去了），
+         * 这三处教程入口当时漏改。重复写同一个偏好值虽无实害，
+         * 但纪律破了就会有人往里塞不幂等的动作。先读、再改、最后落盘。
+         */
+        var ended = false
         _study.update { s ->
             val step = s.tutorialStep ?: return@update s
-            if (step + 1 >= TUTORIAL_STEP_COUNT) {
-                // 走完了也算看过，写盘在主线程之外做（prefs 写入本身很快，
-                // 但仍不该占着状态更新的这一帧）
-                viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = true }
-                s.copy(tutorialStep = null)
-            } else {
-                s.copy(tutorialStep = step + 1)
-            }
+            ended = step + 1 >= TUTORIAL_STEP_COUNT
+            s.copy(
+                tutorialStep = if (ended) null else step + 1
+            )
         }
+        if (ended) markTutorialSeen()
+    }
+
+    /** 教程已看过，写盘在主线程之外做（见 [tutorialNext] 的说明） */
+    private fun markTutorialSeen() {
+        viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = true }
     }
 
     /**
@@ -981,11 +1037,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 那按钮就成了摆设。想再看有设置页的「重新查看新手教程」。
      */
     fun tutorialSkip() {
+        var hadTutorial = false
         _study.update { s ->
-            if (s.tutorialStep == null) return@update s
-            viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = true }
-            s.copy(tutorialStep = null)
+            hadTutorial = s.tutorialStep != null
+            if (hadTutorial) s.copy(tutorialStep = null) else s
         }
+        if (hadTutorial) markTutorialSeen()
     }
 
     /**
@@ -1014,11 +1071,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 只在这一步收掉：前几步翻卡没有这个含义（用户可能只是想看看背面长什么样）。
      */
     fun flipCard() {
+        var endTutorial = false
         _study.update { s ->
-            val endTutorial = s.tutorialStep == TUTORIAL_STEP_LAST
-            if (endTutorial) viewModelScope.launch(Dispatchers.IO) { repo.tutorialSeen = true }
+            endTutorial = s.tutorialStep == TUTORIAL_STEP_LAST
             s.copy(flipped = !s.flipped, tutorialStep = if (endTutorial) null else s.tutorialStep)
         }
+        // 教程收尾的写盘放在 update 外（副作用不进 lambda，见 [tutorialNext] 的说明）
+        if (endTutorial) markTutorialSeen()
     }
 
     /**
@@ -1052,20 +1111,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                  * 否则「认识 N」这个顶部标签会比实际多算一个。
                  */
                 val prevState = withContext(Dispatchers.IO) { repo.stateSnapshot(word.id) }
-                // 写库、取下一个词的等级、评估成就，一次 IO 里做完，避免主线程碰数据库
-                val nextWordLevel = withContext(Dispatchers.IO) {
-                    repo.answerWord(word, known)
-                    repo.userDb.stateOf(snapshot.queue.getOrNull(snapshot.index + 1)?.id ?: -1)
-                        .level
+                // 写库、取下一个词的等级、评估成就，一次 IO 里做完，避免主线程碰数据库。
+                // 下一个词不存在（本题就是最后一个）时跳过查询：stateOf(-1) 虽有 reading()
+                // 兜底不会崩，但那是一次纯粹的空查询，done 分支也用不到它的返回值。
+                val nextIndex = snapshot.index + 1
+                val nextWord = snapshot.queue.getOrNull(nextIndex)
+                /*
+                 * 写库段必须自带兜底。读路径有 reading() 降级，**写路径没有**：
+                 * answerWord / stateOf 背后是 writableDatabase —— 磁盘满、IO 错误、
+                 * 库损坏到 getWritableDatabase 都抛异常时，这里若不接住，异常会
+                 * 穿过 viewModelScope（无 CoroutineExceptionHandler）直接崩溃。
+                 * 答题是全应用频率最高的写操作，崩在这里最伤：整场学习进度没保存、
+                 * 用户还以为是自己点错了。接住后如实说一句「记录没写上」，
+                 * 界面停在原地，用户可以退出重进（状态由 startQueue 重置）。
+                 */
+                val written = runCatching {
+                    withContext(Dispatchers.IO) {
+                        repo.answerWord(word, known)
+                        nextWord?.let { repo.userDb.stateOf(it.id).level } ?: snapshot.currentLevel
+                    }
                 }
-                val gained = withContext(Dispatchers.IO) { repo.evaluateAchievements() }
+                val nextWordLevel = written.getOrDefault(snapshot.currentLevel)
+                val gainedResult = runCatching {
+                    withContext(Dispatchers.IO) { repo.evaluateAchievements() }
+                }
+                val gained = gainedResult.getOrDefault(emptyList())
+                if (written.isFailure || gainedResult.isFailure) {
+                    notify("这条记录可能没能写入本机数据库，学习进度以结算页为准；请检查存储空间后重试")
+                }
+                var applied = false
                 _study.update { s ->
                     // 学习会话已被替换（例如用户退出后重开）时，不要把旧队列的进度写进去
                     if (s.queue !== snapshot.queue) return@update s
                     val next = s.index + 1
                     val done = next >= s.queue.size
-                    // 压栈只在这场会话内有效，队列换了就整栈作废（见 startStudy）
-                    undoStack.addLast(UndoEntry(snapshot.index, word.id, prevState, known))
+                    applied = true
                     s.copy(
                         index = next,
                         flipped = false,
@@ -1080,6 +1160,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         // （库里确实解锁了，纯粹是提示丢失）。
                         newAchievements = s.newAchievements + gained
                     )
+                }
+                /*
+                 * 压栈必须放在 update **之外**（applied 已确认这次真的提交了）。
+                 * MutableStateFlow.update 的 lambda 在 CAS 竞争下会重试，
+                 * 把 undoStack.addLast 塞进去等于让同一条撤销记录被压两次 ——
+                 * 第二次「返回」会撤一个已经撤过的作答，快照还原虽幂等，
+                 * 但 knownCount 会被多退一次，顶栏出现「认识-1」。
+                 * 与 applyAnswer 的 sfx/错题集、tutorialNext 的写盘是同一条纪律。
+                 */
+                if (applied) {
+                    undoStack.addLast(UndoEntry(snapshot.index, word.id, prevState, known))
                 }
                 if (_study.value.finished) {
                     // 进入结算页即停表：结算页的停留时间不算学习时长，
@@ -1156,7 +1247,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val entry = undoStack.removeLast()
         viewModelScope.launch {
             try {
-                val undone = withContext(Dispatchers.IO) { repo.undoAnswer(entry.prev) }
+                /*
+                 * undoAnswer 是写路径（restoreState + deleteLatestLog，两个事务）。
+                 * 读路径有 reading() 降级，写没有 —— 磁盘满 / IO 错误时这里不接住
+                 * 就会穿过 viewModelScope 崩掉。接住后按「撤销没成功」处理：
+                 * 栈不回填（这次点击作废），界面提示如实说明。
+                 */
+                val undone = runCatching {
+                    withContext(Dispatchers.IO) { repo.undoAnswer(entry.prev) }
+                }.getOrElse { false }
                 _study.update { s ->
                     /*
                      * 会话已被换掉时不要乱改：队列不是同一份，
@@ -1200,7 +1299,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val word = _study.value.current ?: return
         viewModelScope.launch {
             favMutex.withLock {
-                val fav = withContext(Dispatchers.IO) { repo.toggleFav(word) }
+                /*
+                 * toggleFav 走 writableDatabase 事务（写路径，无 reading() 兜底）。
+                 * 磁盘满 / IO 错误时不接住会崩；失败时保持 UI 原状并如实提示，
+                 * 不把未发生的翻转写进 favIds。
+                 */
+                val fav = runCatching {
+                    withContext(Dispatchers.IO) { repo.toggleFav(word) }
+                }.getOrElse {
+                    notify("收藏状态可能没能保存，请检查存储空间后重试")
+                    return@launch
+                }
                 _study.update {
                     val set = it.favIds.toMutableSet()
                     if (fav) set.add(word.id) else set.remove(word.id)
@@ -1213,7 +1322,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleFav(word: Word) {
         viewModelScope.launch {
-            favMutex.withLock { withContext(Dispatchers.IO) { repo.toggleFav(word) } }
+            val fav = runCatching {
+                favMutex.withLock { withContext(Dispatchers.IO) { repo.toggleFav(word) } }
+            }.getOrElse {
+                notify("收藏状态可能没能保存，请检查存储空间后重试")
+                return@launch
+            }
             refreshLearn()
             refreshProfile()
         }
@@ -2169,6 +2283,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.IO) { backup.restore(file, allowWordbookMismatch) }
                 }
                     .onSuccess { report ->
+                        /*
+                         * 恢复的语义是「把这台机器的记录整体换成备份那份」，
+                         * 所以**进行中的会话态必须与 resetAll 同构地清掉** —— 此前漏了：
+                         *
+                         * · undoStack 里的快照是恢复**之前**的 word_state，恢复后按「返回上一个词」
+                         *   会把旧数据原样写回新库（restoreState 是整体 REPLACE，不经过任何校验）；
+                         * · _study / _quiz 若还挂着旧会话（学习页在返回栈里），后续作答会把
+                         *   旧队列的进度继续写进恢复后的库，与备份内容混在一起；
+                         * · 在飞的 answerWrites 若不先 join，会在 restore 的事务提交之后
+                         *   把恢复前的错题/错词写入新库 —— 恢复完的库凭空多出脏行；
+                         * · 恢复还换掉了级别偏好，旧闯关快照（quizSessionSnapshot）指向的
+                         *   局已不属于新状态，peekRestorableQuiz 的 stage 校验虽然能拦住
+                         *   跨级别恢复，但同级别的旧局也会与备份语义冲突（进度被悄悄续上）；
+                         * · 推进 quizSnapshotEpoch 让选关页那张「有一局没打完」的卡片立刻重算，
+                         *   否则三个重算键都没变，卡片会一直挂着指向已作废的旧局。
+                         */
+                        answerWrites.toList().joinAll()
+                        answerWrites.clear()
+                        answering = false
+                        finishing = false
+                        questionStartTs = 0L
+                        quizSpec = null
+                        quizSnapshotCleared = false
+                        quizSession++
+                        undoStack.clear()
+                        _study.value = StudyUiState()
+                        _quiz.value = QuizUiState()
+                        _quizSnapshotEpoch.update { it + 1 }
                         // 备份里带着级别 / 目标 / 语速 / 各开关，恢复成功后 _profile
                         // 必须整体换成备份那份，不能让合并逻辑把 old 的当前设置留下。
                         refreshAll(prefsFromRepo = true)

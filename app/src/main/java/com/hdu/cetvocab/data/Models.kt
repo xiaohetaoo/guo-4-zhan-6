@@ -181,8 +181,8 @@ const val WRONG_STUDY_LIMIT = 50
  * 拓展资源练习：入口在「我的」页成就卡下方，定位是**练习**而不是闯关。
  *
  * 不参与排行榜排名 —— [com.hdu.cetvocab.data.UserDb.quizRecords]（榜单列表）、
- * [com.hdu.cetvocab.data.UserDb.bestScore]（最高分）、
- * [com.hdu.cetvocab.data.UserDb.quizPlayedCount]（闯关次数）三处统计都会把它们排除。
+ * [com.hdu.cetvocab.data.UserDb.bestScore]（最高分）与排行榜聚合
+ * [com.hdu.cetvocab.data.UserDb.quizAggregate]（次数/平均分/最高正确率）都会把它们排除。
  *
  * 成绩记录本身仍然照常写入 `quiz_record`：成就系统要靠它按 unit 统计
  * 「易混词辨析 / 翻译全对 5 关」这类进度（见 `quizPerfectCountOfUnit`），

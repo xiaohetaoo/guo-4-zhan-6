@@ -79,7 +79,9 @@ fun LeaderboardScreen(vm: AppViewModel, onBack: () -> Unit, onStartRedo: () -> U
         val bestAccuracy = agg.bestAccuracy
 
         LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            contentPadding = PaddingValues(
+            start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp
+        ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {

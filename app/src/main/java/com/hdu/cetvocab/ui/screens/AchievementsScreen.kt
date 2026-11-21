@@ -69,7 +69,9 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
 
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            contentPadding = PaddingValues(
+            start = 16.dp, end = 16.dp, top = 14.dp, bottom = 24.dp
+        ),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -111,14 +113,18 @@ fun AchievementsScreen(vm: AppViewModel, onBack: () -> Unit) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 IconTrophy(
                                     modifier = Modifier.size(32.dp),
-                                    color = LocalAppColors.current.gold
+                                    // 金属色必须用 tierGold 槽（浅色已压暗到文字级 4.5:1+），
+                                    // 不能用 Color.kt 的装饰金 ColorGold(#D9A441)：
+                                    // 它在 cardMint 底上只有 1.99:1，奖杯图形与「金色N/总数」
+                                    // 文字双双不达标 —— 这是 B1 语义色分离时漏掉的一处。
+                                    color = LocalAppColors.current.tierGold
                                 )
                                 Text(
                                     // 与顶部「已解锁 N / 总数」同一写法：只写「金色 3」
                                     // 分不清是已解锁 3 个，还是这一档一共 3 个。
                                     text = "金色${goldenCount}/${goldenTotal}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = LocalAppColors.current.gold
+                                    color = LocalAppColors.current.tierGold
                                 )
                             }
                         }

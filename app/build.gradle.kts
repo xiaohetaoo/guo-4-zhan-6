@@ -96,8 +96,30 @@ android {
         //   中文笔误「挡案库」→「档案库」、「狡猾的的」→「狡猾的」、「录相」→「录像」；
         //   4 处例句乱码（U+FFFD 把撇号吃了）→ 还原成 '。
         //   词库内容变了，DB_VERSION 7 → 8，老用户升级后自动重拷词库。
-        versionCode = 54
-        versionName = "1.5.0"
+        // v1.5.1 = 第八轮全量审查修复 13 项（P1×4 / P2×5 / P3×4，另有 3 项记录不改）：
+        //   ① 恢复备份后进行中的学习/闯关会话与撤销栈未清（撤销会把旧数据写回新库）；
+        //   ② 清空数据后选关页「有一局没打完」卡片残留死按钮（epoch 不推进）；
+        //   ③ refreshLearn 单元进度循环 125 次查询 → 内存分组（最热链路 N+1）；
+        //   ④ refreshHome 一次刷新全表 states() 扫 4~5 遍 → 预载透传（repo 层加带预载版本）；
+        //   ⑤ tutorialSeen 三处与 undoStack 压栈写在 MutableStateFlow.update 的 lambda 里
+        //      （CAS 重试会重复执行副作用，自家纪律在 applyAnswer 里早已写明）；
+        //   ⑥ 恢复备份后在飞的逐题写入不 join，恢复提交后旧错题写回新库；
+        //   ⑦ 单词本导出 CSV 同词两级出现两行（与生词本界面/成就收藏计数口径不一致）
+        //      → 按 canonicalId 去重；
+        //   ⑧ 成就墙「金色N/总数」文字与奖杯用装饰金（cardMint 上 1.99:1）→ 改 tierGold 文字槽；
+        //   ⑨ 成就墙/排行榜缺 top=14dp（Settings 同款问题，v1.4.x 修过一处漏两处）；
+        //   ⑩ answerCurrent 末题多余 stateOf(-1) 查询；
+        //   ⑪ pendingIconNotice 跨线程读写缺 @Volatile（onStop IO 写 / 回前台主线程读）；
+        //   ⑫ 删除 7 个无调用死方法（randomWords / recentQuizRecords / quizPlayedCount /
+        //      quizCountOfUnit / replaceQuizWrong / clearQuizWrong / allQuizWrong）；
+        //   ⑬ strings.xml 头注释的「全部资源化」声明与现状不符 → 改为如实描述范围。
+        //   ⑭ 高频写路径（answerWord/undoAnswer/toggleFav×2）加 runCatching 兜底：
+        //      磁盘满/IO 错误时不再穿透 viewModelScope 崩溃，改为如实提示。
+        //   记录不改：gold 装饰色在浅底 3:1 全线压线（设计决策）、update 重试的重复压栈
+        //   极端场景、exportStudyCsv 两级行（表语义忠实）。
+        //   lint 0 errors / 5 warnings，与 v1.5.0 基线一致。
+        versionCode = 55
+        versionName = "1.5.1"
         vectorDrawables { useSupportLibrary = true }
     }
 

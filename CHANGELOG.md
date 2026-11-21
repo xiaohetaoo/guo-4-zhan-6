@@ -8,6 +8,81 @@
 
 ---
 
+## [v1.5.1] - 2026-11-21
+
+第八轮全量代码审查（36 个 Kotlin 文件 + res + manifest + gradle）后的修复版，**16 项全部落地，另有 4 项取证后判定不改**。
+审查方法：全文两遍通读 + 130+ 条疑点逐条取证（调用链追踪、WCAG 对比度计算、并发时序推演、SQL 拼接面审计、
+81 项成就阈值对照、备份 round-trip 逐字段核对、SM-2 数值推演、六条功能链路横向复核）。
+审查报告与逐条取证见 `_audit/代码审查报告-v1.5.1.md`。
+
+`versionCode` 54 → 55。词库内容未变，`DB_VERSION` 仍为 8，老用户升级不重拷词库。
+构建验证：`assembleRelease` + `lintRelease` BUILD SUCCESSFUL，lint **0 errors / 5 warnings**（与 v1.5.0 基线一致）。
+
+### 修复（P1：数据正确性 / 性能）
+
+- **恢复备份后进行中的学习/闯关会话未清**：`restoreBackup` 成功后只刷新数据，
+  撤销栈、学习页、闯关页、在飞的逐题写入全部保留 —— 恢复前答过的题可通过「返回上一个词」
+  把**恢复前**的 word_state 原样写回新库（restoreState 是整体 REPLACE），在飞写入还会把旧错题
+  追加进恢复后的库。现在与「清空数据」同构清理：join 并清空 answerWrites、重置 _study/_quiz、
+  作废会话号、清撤销栈、推进快照纪元；选关页「有一局没打完」卡片同步重算。
+- **清空数据后选关页「有一局没打完」卡片残留死按钮**：`prefs.clear()` 清掉了快照键，
+  但快照纪元不推进，`LaunchedEffect` 的三个重算键都没变，卡片继续指向已消失的旧局，
+  点「继续」能照旧开出一局旧题。现在清空成功路径一并推进纪元与会话号。
+- **词库页刷新的 N+1 查询（性能，最热链路）**：`refreshLearn` 已取回本级全量词表（每词带 unit 列），
+  却仍按单元数循环 `wordsOfUnit` —— 四级 95 次、六级 125 次 rawQuery，而本方法挂在
+  冷启动、切级别、收藏切换、学习结束、闯关退出五条链路上。改为从已取回的词表内存分组
+  （groupBy 保序，结果与逐单元查询逐字段相同），125 次查询收敛成 0 次；
+  `totalWords` 顺带改用词表 size，省一次 COUNT。
+- **首页刷新一次全表扫 4~5 遍（性能）**：`overview` / `dueCount` / `todayQueue` /
+  本级已学数各自调用 `states()`。repo 层给 `dueWords / dueCount / newWords / todayQueue /
+  extraQueue / favWords / wrongWords` 七个方法加带预载参数的版本（旧签名保留、委托 null），
+  一次首页刷新降到 1 遍全表，词库页从 3 遍降到 1 遍。
+
+### 修复（P2：并发纪律 / 口径 / 可读性）
+
+- **MutableStateFlow.update 的 lambda 里写副作用（4 处）**：`tutorialNext` / `tutorialSkip` /
+  `flipCard` 在 update 内启动写盘协程，`answerCurrent` 在 update 内压撤销栈。
+  update 的 lambda 在 CAS 竞争下会重试，副作用随之重复执行 —— 撤销栈重复压栈会让
+  第二次「返回」撤一个已撤过的作答。三处教程入口改为 update 外统一 `markTutorialSeen()`，
+  压栈改用 `applied` 标志在 update 外执行一次（与 `applyAnswer` 早已写明的同一条纪律）。
+- **单词本导出 CSV 同一个词出现两行**：六级词库完整包含四级，同词两级各一行（两个 id），
+  用户在两级各收藏一次后导出就有两行 —— 而生词本界面按级别过滤、成就侧 favCount 全局去重，
+  三种口径互不相同。导出改按 `canonicalId` 去重（保留 id 较小的行，输出确定性稳定）。
+  「学习记录 CSV」刻意不去重：两级的熟练度/错题计数本来就独立，那是 word_state 的真实语义。
+- **成就墙「金色 N / 总数」文字与奖杯对比度 1.99:1**：labelSmall（需 4.5:1）与 32dp 图标
+  （需 3:1）都用了装饰金 `gold`（#D9A441），在薄荷卡底上双双不达标 —— 是 v1.4.12
+  语义色分离时漏掉的一处。改用 `tierGold` 文字槽（浅 4.76 / 深 7.35）。
+- **`pendingIconNotice` 跨线程读写无同步**：`MainActivity.onStop` 的 IO 协程写入、
+  回前台的主线程读取，无 @Volatile 也无锁 —— 可见性无保证，切换失败的补播提示可能永远不出现。
+  加 `@Volatile`。
+- **成就墙 / 排行榜缺 top=14dp**：与 SettingsScreen 已修过的「首卡贴顶栏」同款问题，
+  两处漏网。补齐后五个一级页面顶距一致。
+
+### 修复（P3：工程卫生）
+
+- **高频写路径无异常兜底**：读路径有 `reading()` 降级，写路径没有 —— 磁盘满 / IO 错误时
+  `answerWord` / `undoAnswer` / `toggleFav` 的异常会穿过 viewModelScope 直接崩溃。
+  四处写调用包 `runCatching`，失败如实提示：答题失败仍推进界面（不卡死，撤销栈照常压栈，
+  快照还原幂等）、撤销失败按「没撤回」处理、收藏失败保持原状。
+- **answerCurrent 末题多余的空查询**：`stateOf(-1)` 有兜底不崩，但纯属浪费，末题跳过。
+- **删除 7 个零调用死方法**：`WordDb.randomWords` 与 `UserDb.recentQuizRecords /
+  quizPlayedCount / quizCountOfUnit / replaceQuizWrong / clearQuizWrong / allQuizWrong`
+  （各自被现行路径取代），`Models.kt` 里引用旧方法的 KDoc 同步修正。
+- **strings.xml 头注释与现状不符**：「UI 层 Text 字面量全部资源化」与实际范围不符
+  （Home/Achievements/Leaderboard 三屏为 0 资源化），改为如实描述收录范围。
+- **MIDNIGHT 成就补注释**：三处时段成就共用「右端写作下一整点、左闭右开」的文案惯例，
+  在 MIDNIGHT 处写明，避免下一轮审查把它误判成「文案比判定宽」（v1.4.10 修的是范围宽，
+  不是边界格式）。
+
+### 复核后判定不改（记录备查）
+
+- gold 装饰色（色条/星星/奖杯）在浅底上 3:1 压线：纯装饰、旁边均有等价文字，改色需实机确认观感；
+- `exportStudyCsv` 同词两级两行：两级的熟练度本来就独立，导出忠实于表语义；
+- StepBack 按钮显隐依赖「update 触发的重组在同步压栈之后应用」：主线程调度顺序成立，记录为隐性依赖；
+- v1.4.12 §四的 8 条「不是缺陷」结论全部复核通过，无一条翻案。
+
+---
+
 ## [v1.5.0] - 2026-11-15
 
 第七轮全量代码审查（34 个 Kotlin 文件 + res + manifest）后的修复版，**11 项落地、1 项确认为误报后回退**。

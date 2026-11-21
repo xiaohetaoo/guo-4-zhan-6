@@ -126,13 +126,26 @@ class BackupManager(
         return file
     }
 
-    /** 导出收藏的单词本，按字母序 */
+    /**
+     * 导出收藏的单词本，按字母序。
+     *
+     * **必须按「不同单词」去重**（[WordDb.canonicalId] 口径）：六级词库完整包含四级，
+     * 同一个词在词表里有两行（两个 id）。用户在两个级别各收藏一次，
+     * 不过滤的话 CSV 会出现两行一模一样的单词 —— 而生词本界面是按级别显示的
+     * （[com.hdu.cetvocab.data.VocabRepository.favWords]），成就侧的收藏计数
+     * 也是全局去重口径（favCount）。导出作为「单词本」，取三者中同一口径：
+     * 每个单词只保留一行（同词两级词条内容相同，仅 stage/unit 列随行不同，
+     * 保留 id 较小的那行 —— 四级行 —— 让输出确定性稳定）。
+     */
     fun exportFavCsv(): File {
         val favIds = ArrayList<Int>()
         userDb.readableDatabase.rawQuery(
             "SELECT word_id FROM word_state WHERE fav=1", null
         ).use { c -> while (c.moveToNext()) favIds.add(c.getInt(0)) }
-        val words = wordDb.wordsByIds(favIds).sortedBy { it.word.lowercase(Locale.ROOT) }
+        val words = wordDb.wordsByIds(favIds)
+            .groupBy { wordDb.canonicalId(it.id) }
+            .map { (_, rows) -> rows.minBy { row -> row.id } }
+            .sortedBy { it.word.lowercase(Locale.ROOT) }
         require(words.isNotEmpty()) { "还没有收藏的生词可以导出" }
         val file = uniqueFile(exportDir(), "单词本_${stamp()}", "csv")
         val sb = StringBuilder()

@@ -579,64 +579,11 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         list
     }
 
-    fun allQuizWrong(): List<QuizWrong> = reading(emptyList()) { db ->
-        val list = ArrayList<QuizWrong>()
-        db.rawQuery(
-            "SELECT stage,kind,word_id,wrong_count,last_ts FROM quiz_wrong " +
-                "ORDER BY stage,kind,word_id", null
-        ).use { c ->
-            while (c.moveToNext()) {
-                list.add(QuizWrong(c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getLong(4)))
-            }
-        }
-        list
-    }
-
-    /** 备份恢复用：整表替换（先清后插），与其余各段的「清空再写回」口径一致。 */
-    fun replaceQuizWrong(rows: List<QuizWrong>) {
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            db.execSQL("DELETE FROM quiz_wrong")
-            for (r in rows) {
-                db.execSQL(
-                    "INSERT OR REPLACE INTO quiz_wrong(stage,kind,word_id,wrong_count,last_ts) VALUES(?,?,?,?,?)",
-                    arrayOf(r.stage, r.kind, r.wordId, r.wrongCount, r.lastTs)
-                )
-            }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
-        }
-    }
-
-    fun clearQuizWrong() {
-        writableDatabase.execSQL("DELETE FROM quiz_wrong")
-    }
-
     fun quizRecords(limit: Int = 100): List<QuizRecord> = reading(emptyList()) { db ->
         val list = ArrayList<QuizRecord>()
         db.rawQuery(
             "SELECT id,stage,unit,mode,score,total,correct,max_combo,duration_ms,ts " +
                 "FROM quiz_record WHERE $RANKED_ONLY ORDER BY score DESC, ts DESC LIMIT $limit", null
-        ).use { c ->
-            while (c.moveToNext()) {
-                list.add(
-                    QuizRecord(
-                        c.getLong(0), c.getInt(1), c.getInt(2), c.getString(3) ?: "",
-                        c.getInt(4), c.getInt(5), c.getInt(6), c.getInt(7), c.getLong(8), c.getLong(9)
-                    )
-                )
-            }
-        }
-        list
-    }
-
-    fun recentQuizRecords(limit: Int = 20): List<QuizRecord> = reading(emptyList()) { db ->
-        val list = ArrayList<QuizRecord>()
-        db.rawQuery(
-            "SELECT id,stage,unit,mode,score,total,correct,max_combo,duration_ms,ts " +
-                "FROM quiz_record WHERE $RANKED_ONLY ORDER BY ts DESC LIMIT $limit", null
         ).use { c ->
             while (c.moveToNext()) {
                 list.add(
@@ -658,19 +605,10 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
         }
     }
 
-    fun quizPlayedCount(): Int = reading(0) { db ->
-        db.rawQuery(
-            "SELECT COUNT(*) FROM quiz_record WHERE $RANKED_ONLY", null
-        ).use {
-            if (it.moveToFirst()) it.getInt(0) else 0
-        }
-    }
-
     /**
      * 全部闯关次数，**不**排除辨析 / 翻译两类拓展练习。
      *
-     * 排行榜与最高分用 [quizPlayedCount]（拓展练习不计入排名，是有意设计），
-     * 但成就不能用它：成就墙上「明辨秋毫 = 完成一次易混词辨析闯关」和
+     * 成就判定不能按「参与排名」口径数：成就墙上「明辨秋毫 = 完成一次易混词辨析闯关」和
      * 「初次闯关 = 完成第一次单词闯关」说的是同一件事，用两套口径就会出现
      * 「已解锁明辨秋毫、却显示还没初次闯关」的自相矛盾。
      * 凡是对用户表述为「累计闯关 N 次」的判定，一律走这个全量口径。
@@ -709,16 +647,6 @@ class UserDb(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VER
             } else {
                 QuizAggregate()
             }
-        }
-    }
-
-    /** 某一专题关卡（按 unit 范围值）的完成次数 */
-    fun quizCountOfUnit(unit: Int): Int = reading(0) { db ->
-        db.rawQuery(
-            "SELECT COUNT(*) FROM quiz_record WHERE unit=?",
-            arrayOf(unit.toString())
-        ).use {
-            if (it.moveToFirst()) it.getInt(0) else 0
         }
     }
 

@@ -331,9 +331,18 @@ class VocabRepository(context: Context) {
      * 必须按**当前级别**过滤：学习记录是按 word_id 全局存放的，
      * 不过滤的话在六级学习时会把四级的待复习词也排进队列。
      */
-    fun dueWords(limit: Int = 30): List<Word> {
+    fun dueWords(limit: Int = 30): List<Word> = dueWords(limit, null)
+
+    /**
+     * 带 [preloadedStates] 的版本：调用方（如 [todayQueue] / [dueCount]）往往已经
+     * 拿到了全量 states，再让这里自己查一次就是白白多一次全表扫描 —— 一次
+     * refreshHome 会把 word_state 全表读 4~5 遍（overview / dueCount / todayQueue
+     * 各自为政）。行数少时每遍几毫秒，乘上刷新频率（冷启动、切级别、答完一题、
+     * 返回前台）就是一个可感知的固定开销。
+     */
+    fun dueWords(limit: Int = 30, preloadedStates: Map<Int, WordState>? = null): List<Word> {
         val now = System.currentTimeMillis()
-        val ids = userDb.states().values
+        val ids = (preloadedStates ?: userDb.states()).values
             .filter { it.level in 1..5 && it.nextReviewTs in 1..now }
             .sortedBy { it.nextReviewTs }
             .map { it.wordId }
@@ -352,9 +361,12 @@ class VocabRepository(context: Context) {
      * 那是「取前 40 条」而不是「有 40 条」。到期词积压到上百个时，
      * 首页会一直显示「待复习 40 词」，用户完全看不出欠了多少。
      */
-    fun dueCount(): Int {
+    fun dueCount(): Int = dueCount(null)
+
+    /** 与 [dueWords] 同理：接受调用方预载的 states，避免重复全表扫描。 */
+    fun dueCount(preloadedStates: Map<Int, WordState>? = null): Int {
         val now = System.currentTimeMillis()
-        val ids = userDb.states().values
+        val ids = (preloadedStates ?: userDb.states()).values
             .filter { it.level in 1..5 && it.nextReviewTs in 1..now }
             .map { it.wordId }
         if (ids.isEmpty()) return 0
@@ -364,19 +376,25 @@ class VocabRepository(context: Context) {
         }
     }
 
-    fun newWords(limit: Int): List<Word> {
+    fun newWords(limit: Int): List<Word> = newWords(limit, null)
+
+    /** 与 [dueWords] 同理：接受调用方预载的 states，避免重复全表扫描。 */
+    fun newWords(limit: Int, preloadedStates: Map<Int, WordState>? = null): List<Word> {
         if (limit <= 0) return emptyList()
-        val states = userDb.states()
+        val states = preloadedStates ?: userDb.states()
         return wordDb.wordsOfStage(stage)
             .filter { (states[it.id]?.level ?: 0) == 0 }
             .take(limit)
     }
 
     /** 今日学习队列：先复习到期词，再补新词到每日目标 */
-    fun todayQueue(): List<Word> {
+    fun todayQueue(): List<Word> = todayQueue(null)
+
+    /** 与 [dueWords] 同理：接受调用方预载的 states，避免重复全表扫描。 */
+    fun todayQueue(preloadedStates: Map<Int, WordState>? = null): List<Word> {
         val learnedToday = userDb.todayLearnedCount()
         val remain = (dailyGoal - learnedToday).coerceAtLeast(0)
-        return dueWords(40) + newWords(remain)
+        return dueWords(40, preloadedStates) + newWords(remain, preloadedStates)
     }
 
     /**
@@ -387,7 +405,11 @@ class VocabRepository(context: Context) {
      * 让用户完成每日目标后还能主动加量（超前学习，不计入当日目标口径）。
      * 返回为空（既无到期词也无新词）时由 startQueue 统一弹提示，无需在此特判。
      */
-    fun extraQueue(count: Int = 20): List<Word> = dueWords(40) + newWords(count)
+    fun extraQueue(count: Int = 20): List<Word> = extraQueue(count, null)
+
+    /** 与 [todayQueue] 同理：接受调用方预载的 states，避免重复全表扫描。 */
+    fun extraQueue(count: Int = 20, preloadedStates: Map<Int, WordState>? = null): List<Word> =
+        dueWords(40, preloadedStates) + newWords(count, preloadedStates)
 
     fun unitWords(unit: Int): List<Word> = wordDb.wordsOfUnit(stage, unit)
 
@@ -400,8 +422,11 @@ class VocabRepository(context: Context) {
      * **两张一模一样的卡片**，「开始复习生词」还会把同一个词排进队列两次。
      * 分段标题的计数直接取 size，过滤后计数自动跟着正确。
      */
-    fun favWords(): List<Word> {
-        val ids = userDb.states().values.filter { it.fav }.map { it.wordId }
+    fun favWords(): List<Word> = favWords(null)
+
+    /** 与 [dueWords] 同理：接受调用方预载的 states，避免重复全表扫描。 */
+    fun favWords(preloadedStates: Map<Int, WordState>? = null): List<Word> {
+        val ids = (preloadedStates ?: userDb.states()).values.filter { it.fav }.map { it.wordId }
         return wordDb.wordsByIds(ids)
             .filter { it.stage == stage }
             .sortedBy { it.word }
@@ -420,8 +445,11 @@ class VocabRepository(context: Context) {
      * 既重复显示，又白白占掉 [WRONG_STUDY_LIMIT] 的名额。
      * 注意过滤要放在 take(limit) **之前**，否则名额会先被别的级别占掉。
      */
-    fun wrongWords(limit: Int = 60): List<Word> {
-        val candidates = userDb.states().values
+    fun wrongWords(limit: Int = 60): List<Word> = wrongWords(limit, null)
+
+    /** 与 [dueWords] 同理：接受调用方预载的 states，避免重复全表扫描。 */
+    fun wrongWords(limit: Int = 60, preloadedStates: Map<Int, WordState>? = null): List<Word> {
+        val candidates = (preloadedStates ?: userDb.states()).values
             // 已答到「精通」档（LEVEL_EXPERT）的词不再占用错词本，避免只增不减
             .filter { it.wrongCount > 0 && it.level < LEVEL_EXPERT }
             .sortedWith(compareByDescending<WordState> { it.wrongCount }.thenBy { it.wordId })

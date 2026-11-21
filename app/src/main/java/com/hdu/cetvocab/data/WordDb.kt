@@ -495,10 +495,6 @@ class WordDb(private val context: Context) {
         )
     }
 
-    /** 随机取词，用于生成干扰项 */
-    fun randomWords(stage: Int, limit: Int): List<Word> =
-        queryWords("stage=?", arrayOf(stage.toString()), "RANDOM() LIMIT $limit")
-
     /**
      * 取某一级别的「真题句子翻译」题库。
      *
